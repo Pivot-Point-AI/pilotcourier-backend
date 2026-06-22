@@ -70,6 +70,8 @@ export interface IUser extends Document {
   savedPackages: ISavedPackage[];
   savedProducts: ISavedProduct[];
   tickets: ITicket[];
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -146,6 +148,8 @@ const UserSchema = new Schema<IUser>(
     savedPackages: [SavedPackageSchema],
     savedProducts: [SavedProductSchema],
     tickets: [TicketSchema],
+    resetPasswordToken: { type: String, select: false },
+    resetPasswordExpires: { type: Date, select: false },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );

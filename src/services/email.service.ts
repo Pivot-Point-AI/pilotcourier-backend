@@ -227,6 +227,24 @@ class EmailService {
     });
   }
 
+  async sendPasswordResetEmail(email: string, firstName: string, resetUrl: string): Promise<void> {
+    const content = `
+      <div class="greeting">Reset your password</div>
+      <p class="text">Hi ${firstName}, we received a request to reset the password for your Pilot Courier account. Click the button below to choose a new password.</p>
+
+      <a href="${resetUrl}" class="btn">Reset Password</a>
+
+      <div class="divider"></div>
+      <p class="text">This link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email — your password will remain unchanged.</p>
+    `;
+
+    await this.send({
+      to: email,
+      subject: 'Reset Your Pilot Courier Password',
+      html: this.getBaseTemplate(content, 'Password Reset'),
+    });
+  }
+
   private async send(options: EmailOptions): Promise<void> {
     try {
       await this.transporter.sendMail({

@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import {
   register, login, getMe, updateProfile, updateFullProfile,
+  forgotPassword, resetPassword,
   addSavedAddress, deleteSavedAddress,
   getPackages, addPackage, deletePackage,
   getProducts, addProduct, deleteProduct,
   getTickets, createTicket,
+  getSavedQuotes, deleteSavedQuote,
 } from '../controllers/auth.controller';
 import { getRates, bookShipment, confirmPayment, trackShipment, cancelShipment, getMyShipments, downloadLabel } from '../controllers/shipment.controller';
 import { createStripeIntent, stripeWebhook, createPayPalOrder, capturePayPalOrder } from '../controllers/payment.controller';
@@ -16,6 +18,8 @@ const router = Router();
 // ── Auth ──────────────────────────────────────────────────────────────────────
 router.post('/auth/register', register);
 router.post('/auth/login', login);
+router.post('/auth/forgot-password', forgotPassword);
+router.post('/auth/reset-password', resetPassword);
 router.get('/auth/me', authenticate, getMe);
 router.patch('/auth/profile', authenticate, updateProfile);
 router.patch('/auth/profile/full', authenticate, updateFullProfile);
@@ -36,8 +40,12 @@ router.delete('/auth/products/:productId', authenticate, deleteProduct);
 router.get('/auth/tickets', authenticate, getTickets);
 router.post('/auth/tickets', authenticate, createTicket);
 
+// ── Saved Quotes ──────────────────────────────────────────────────────────────
+router.get('/auth/quotes', authenticate, getSavedQuotes);
+router.delete('/auth/quotes/:quoteId', authenticate, deleteSavedQuote);
+
 // ── Shipments ─────────────────────────────────────────────────────────────────
-router.post('/shipments/rates', getRates);
+router.post('/shipments/rates', optionalAuth, getRates);
 router.post('/shipments/book', optionalAuth, bookShipment);
 router.post('/shipments/:id/confirm-payment', optionalAuth, confirmPayment);
 router.get('/shipments/track/:trackingNumber', trackShipment);

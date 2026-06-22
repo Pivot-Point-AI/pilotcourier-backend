@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import User from '../models/User';
+import SavedQuote from '../models/SavedQuote';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 
@@ -71,6 +73,64 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
         role: user.role,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ── POST /api/auth/forgot-password ───────────────────────────────────────────
+export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email } = req.body;
+    const genericResponse = {
+      success: true,
+      message: 'If an account with that email exists, a password reset link has been sent.',
+    };
+
+    const user = await User.findOne({ email });
+    if (!user) return res.json(genericResponse);
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await user.save();
+
+    const resetUrl = `${process.env.FRONTEND_URL}/auth/reset-password?token=${rawToken}`;
+    await emailService.sendPasswordResetEmail(user.email, user.firstName, resetUrl);
+
+    res.json(genericResponse);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ── POST /api/auth/reset-password ────────────────────────────────────────────
+export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ success: false, message: 'Token and new password are required.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: new Date() },
+    }).select('+resetPasswordToken +resetPasswordExpires');
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'This reset link is invalid or has expired.' });
+    }
+
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.json({ success: true, message: 'Your password has been reset successfully. You can now sign in.' });
   } catch (error) {
     next(error);
   }
@@ -219,6 +279,33 @@ export const createTicket = async (req: Request, res: Response, next: NextFuncti
     user.tickets.push({ ...req.body, status: 'open' } as any);
     await user.save();
     res.json({ success: true, message: 'Ticket submitted.', tickets: user.tickets });
+  } catch (error) { next(error); }
+};
+
+// ── Saved Quotes ──────────────────────────────────────────────────────────────
+export const getSavedQuotes = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '10'), 10) || 10, 1), 50);
+    const filter = { user: (req as any).user.userId };
+
+    const [quotes, total] = await Promise.all([
+      SavedQuote.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+      SavedQuote.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      quotes,
+      pagination: { page, limit, total, pages: Math.max(Math.ceil(total / limit), 1) },
+    });
+  } catch (error) { next(error); }
+};
+
+export const deleteSavedQuote = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await SavedQuote.deleteOne({ _id: req.params.quoteId, user: (req as any).user.userId });
+    res.json({ success: true, message: 'Quote removed.' });
   } catch (error) { next(error); }
 };
 

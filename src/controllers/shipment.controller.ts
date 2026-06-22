@@ -1,9 +1,38 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import Shipment from '../models/Shipment';
+import SavedQuote from '../models/SavedQuote';
 import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
+
+const QUOTE_VALIDITY_DAYS: Record<'quick' | 'detailed', number> = {
+  quick: 15,
+  detailed: 60,
+};
+
+const MARKUP_RATE = parseFloat(process.env.RATE_MARKUP_PERCENT || '15') / 100;
+const applyMarkup = (price: number): number => parseFloat((price * (1 + MARKUP_RATE)).toFixed(2));
+
+// Normalized fingerprint of the inputs that define a quote — used to dedupe identical
+// re-quotes for the same user (same addresses/contact/package values) instead of
+// saving a fresh record every time.
+const SIGNATURE_FIELDS = [
+  'originPostal', 'originCity', 'originProvince', 'originCountry', 'originResidential',
+  'originName', 'originCompany', 'originStreet', 'originStreet2', 'originPhone', 'originEmail',
+  'destinationPostal', 'destinationCity', 'destinationProvince', 'destinationCountry', 'destinationResidential',
+  'destinationName', 'destinationCompany', 'destinationStreet', 'destinationStreet2', 'destinationPhone', 'destinationEmail',
+  'weight', 'weightUnit', 'length', 'width', 'height', 'dimensionUnit',
+  'description', 'insuranceAmount', 'specialHandling', 'packagingType', 'packages',
+];
+const buildQuoteSignature = (body: Record<string, any>): string => {
+  const normalized: Record<string, any> = {};
+  for (const key of SIGNATURE_FIELDS) {
+    const v = body[key];
+    normalized[key] = typeof v === 'string' ? v.trim().toLowerCase() : v ?? null;
+  }
+  return JSON.stringify(normalized);
+};
 
 const generateShipmentNumber = (): string => {
   const prefix = 'PC';
@@ -65,6 +94,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       insuranceAmount = 0,
       specialHandling = false,
       packagingType = 'My Packaging',
+      quoteType = 'quick',
     } = req.body;
 
     // Map frontend labels to valid netParcel packaging types
@@ -153,7 +183,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       carrierName: r.service_name.split(' ')[0],
       serviceCode: r.service_code,
       serviceName: r.service_name,
-      totalCharge: parseNpPrice(r.total_price),
+      totalCharge: applyMarkup(parseNpPrice(r.total_price)),
       tariffPrice: parseNpPrice(r.tarriff_price || r.tariff_price || 0),
       currency: r.currency || 'CAD',
       transitDays: calcTransitDays(r.transit_days, r.min_delivery_date, r.max_delivery_date),
@@ -168,6 +198,29 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     }));
 
     const rates = tagRates(normalized);
+
+    const userId = (req as any).user?.userId;
+    if (userId) {
+      const resolvedType: 'quick' | 'detailed' = quoteType === 'detailed' ? 'detailed' : 'quick';
+      const validityDays = QUOTE_VALIDITY_DAYS[resolvedType];
+      try {
+        await SavedQuote.findOneAndUpdate(
+          { user: userId, type: resolvedType, signature: buildQuoteSignature(req.body) },
+          {
+            user: userId,
+            type: resolvedType,
+            signature: buildQuoteSignature(req.body),
+            formData: req.body,
+            rates,
+            expiresAt: new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000),
+          },
+          { upsert: true, new: true }
+        );
+      } catch (err) {
+        logger.error('Failed to save quote:', err);
+      }
+    }
+
     res.json({ success: true, rates, count: rates.length });
   } catch (error) {
     next(error);
