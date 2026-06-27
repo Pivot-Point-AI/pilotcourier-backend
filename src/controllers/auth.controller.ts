@@ -14,6 +14,7 @@ const generateToken = (userId: string, role: string): string => {
   );
 };
 
+
 export const register = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { firstName, lastName, email, phone, password } = req.body;
