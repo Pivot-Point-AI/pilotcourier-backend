@@ -156,8 +156,8 @@ class NetParcelService {
 
       return rates;
     } catch (error: any) {
-      logger.error('netParcel getRates error status:', error?.response?.status);
-      logger.error('netParcel getRates error data:', JSON.stringify(error?.response?.data || error.message));
+      logger.error(`netParcel getRates error status: ${error?.response?.status}`);
+      logger.error(`netParcel getRates error data: ${JSON.stringify(error?.response?.data || error.message)}`);
       throw new Error(error?.response?.data?.message || 'Failed to fetch shipping rates');
     }
   }
