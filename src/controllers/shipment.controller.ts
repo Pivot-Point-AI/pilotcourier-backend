@@ -104,7 +104,19 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     const uom: 'I' | 'M' = (weightUnit === 'lbs' || dimensionUnit === 'in') ? 'I' : 'M';
 
     // Clean inputs
-    const cleanPostal = (p: string) => (p || '').trim() || null;
+    const cleanPostal = (p: string, country?: string) => {
+      const s = (p || '').trim().toUpperCase().replace(/\s+/g, '');
+      if (!s) return null;
+      // Canadian postal code: normalize to "A1A 1A1" format
+      if ((country || 'CA') === 'CA' && /^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(s)) {
+        return `${s.slice(0, 3)} ${s.slice(3)}`;
+      }
+      // US ZIP: normalize to "12345" or "12345-6789"
+      if (country === 'US' && /^\d{9}$/.test(s)) {
+        return `${s.slice(0, 5)}-${s.slice(5)}`;
+      }
+      return s;
+    };
     const cleanProvince = (p: string) => {
       const s = (p || '').trim();
       if (!s) return null;
@@ -118,7 +130,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       rate: {
         origin: {
           country: originCountry,
-          postal_code: cleanPostal(originPostal) ?? '',
+          postal_code: cleanPostal(originPostal, originCountry) ?? '',
           province: cleanProvince(originProvince) ?? '',
           city: originCity || '',
           name: '',
@@ -132,7 +144,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         },
         destination: {
           country: destinationCountry,
-          postal_code: cleanPostal(destinationPostal) ?? '',
+          postal_code: cleanPostal(destinationPostal, destinationCountry) ?? '',
           province: cleanProvince(destinationProvince) ?? '',
           city: destinationCity || '',
           name: '',
