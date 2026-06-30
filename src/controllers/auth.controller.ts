@@ -6,6 +6,7 @@ import SavedQuote from '../models/SavedQuote';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 
+
 const generateToken = (userId: string, role: string): string => {
   return jwt.sign(
     { userId, role },
