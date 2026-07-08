@@ -90,6 +90,7 @@ export interface IShipment extends Document {
   shipper: IAddress;
   recipient: IAddress;
   parcels: IParcel[];
+  packagingType: string;
   shipmentType: 'domestic' | 'international';
   selectedRate: IRate;
   allRates: IRate[];
@@ -205,6 +206,7 @@ const ShipmentSchema = new Schema<IShipment>(
     shipper: { type: AddressSchema, required: true },
     recipient: { type: AddressSchema, required: true },
     parcels: [ParcelSchema],
+    packagingType: { type: String, default: 'My Packaging' },
     shipmentType: { type: String, enum: ['domestic', 'international'], required: true },
     selectedRate: { type: RateSchema, required: true },
     allRates: [RateSchema],

@@ -94,12 +94,18 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       insuranceAmount = 0,
       specialHandling = false,
       packagingType = 'My Packaging',
+      freightClass,
       quoteType = 'quick',
     } = req.body;
 
     // Map frontend labels to valid netParcel packaging types
     const VALID_PACKAGING = ['My Packaging', 'Envelope', 'Pak', 'Pallet'];
     const resolvedPackaging = VALID_PACKAGING.includes(packagingType) ? packagingType : 'My Packaging';
+
+    // netParcel's API requires freight_class whenever packaging_type is "Pallet"
+    if (resolvedPackaging === 'Pallet' && !freightClass) {
+      return res.status(400).json({ success: false, message: 'Freight class is required for Pallet (LTL) shipments.' });
+    }
 
     const uom: 'I' | 'M' = (weightUnit === 'lbs' || dimensionUnit === 'in') ? 'I' : 'M';
 
@@ -125,6 +131,10 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       // Otherwise take the first word as the code (e.g. "NWFP Peshawar" → "NWFP")
       return s.split(/\s+/)[0].toUpperCase();
     };
+    // Geo lookups (e.g. zippopotam.us) can return neighborhood-qualified names like
+    // "Ajax East" for a postal code whose canonical municipality is "Ajax" — netParcel's
+    // carrier-matching expects the canonical city, so strip trailing directional suffixes.
+    const cleanCity = (c: string) => (c || '').replace(/\s+(East|West|North|South)$/i, '').trim();
 
     const ratePayload = {
       rate: {
@@ -132,7 +142,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           country: originCountry,
           postal_code: cleanPostal(originPostal, originCountry) ?? '',
           province: cleanProvince(originProvince) ?? '',
-          city: originCity || '',
+          city: cleanCity(originCity),
           name: '',
           address1: '',
           address2: '',
@@ -146,7 +156,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           country: destinationCountry,
           postal_code: cleanPostal(destinationPostal, destinationCountry) ?? '',
           province: cleanProvince(destinationProvince) ?? '',
-          city: destinationCity || '',
+          city: cleanCity(destinationCity),
           name: '',
           address1: '',
           address2: '',
@@ -163,10 +173,12 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
             length: parseFloat(length) || 0,
             width: parseFloat(width) || 0,
             height: parseFloat(height) || 0,
-            weight: parseFloat(weight),
+            weight: parseFloat(weight) || 0,
             insurance_amount: parseFloat(insuranceAmount) || 0,
             description: description || 'Package',
             special_handling: !!specialHandling,
+            // netParcel requires freight_class when packaging_type is "Pallet"
+            ...(resolvedPackaging === 'Pallet' && freightClass ? { freight_class: String(freightClass) } : {}),
           }],
         },
       },
@@ -177,6 +189,8 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     let npRates;
     try {
       npRates = await netparcelService.getRates(ratePayload);
+      // Exclude netParcel's own generic/non-bookable "Preferred Pickup" placeholder rate (code 380000, no tariff)
+      npRates = npRates.filter((r: any) => r.service_code !== '380000');
       logger.info(`netParcel returned ${npRates.length} rates`);
       if (!npRates.length) {
         const isInternational = originCountry !== destinationCountry;
@@ -246,6 +260,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       shipper, recipient, parcels, selectedRate,
       shipmentType, guestEmail, guestPhone,
       pickupDetails, specialServices, references,
+      packagingType,
     } = req.body;
     const userId = (req as any).user?.userId;
 
@@ -259,6 +274,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       shipper,
       recipient,
       parcels,
+      packagingType: packagingType || 'My Packaging',
       selectedRate,
       shipmentType,
       pickupDetails,
@@ -344,7 +360,7 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
             tailgate_pickup: ss.tailgatePickup || false,
             tailgate_delivery: ss.tailgateDelivery || false,
           },
-          packaging_information: netparcelService.buildPackagingInformation(shipment.parcels),
+          packaging_information: netparcelService.buildPackagingInformation(shipment.parcels, shipment.packagingType),
           references: refs.slice(0, 3),
           generate_label: true,
         },

@@ -239,13 +239,14 @@ class NetParcelService {
       description: string;
       declaredValue?: number;
     }>,
+    packagingType = 'My Packaging',
   ): NpPackagingInformation {
     // Determine uom from first parcel's units
     const firstParcel = parcels[0];
     const uom = firstParcel?.weightUnit === 'lbs' ? 'I' : 'M';
 
     return {
-      packaging_type: 'My Packaging',
+      packaging_type: packagingType,
       uom,
       packages: parcels.map((p) => ({
         length: p.length,

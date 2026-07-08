@@ -79,8 +79,13 @@ router.get('/geo/postal', async (req, res) => {
     const data = await r.json() as any;
     const place = data.places?.[0];
     if (!place) return res.json({ city: '', province: '' });
-    const rawCity: string = place['place name'] || '';
-    const city = rawCity.replace(/\s*\(.*?\)\s*/g, '').trim();
+    let rawCity: string = place['place name'] || '';
+    // Some Canadian federal-government FSAs (e.g. K1A) resolve to descriptive
+    // administrative text like "Government of Canada Ottawa and Gatineau offices"
+    // instead of a real municipality — extract the actual city from that pattern.
+    const govMatch = rawCity.match(/^Government of Canada (.+?) offices$/i);
+    if (govMatch) rawCity = govMatch[1].split(/\s+and\s+/i)[0].trim();
+    const city = rawCity.replace(/\s*\(.*?\)\s*/g, '').replace(/\s+(East|West|North|South)$/i, '').trim();
     res.json({
       city,
       province: place['state abbreviation'] || place['state'],
