@@ -166,6 +166,15 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           address_type: destinationResidential ? 'residential' : '',
           company_name: '',
         },
+        items: [{
+          name: description || 'Package',
+          quantity: 1,
+          weight: parseFloat(weight) || 0,
+          weightUnit: uom === 'I' ? 'lbs' : 'kg',
+          price: parseFloat(insuranceAmount) || 0,
+          requires_shipping: true,
+          taxable: true,
+        }],
         packaging_information: {
           packaging_type: resolvedPackaging,
           uom,
