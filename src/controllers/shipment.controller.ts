@@ -1,10 +1,102 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
-import Shipment from '../models/Shipment';
+import Shipment, { IShipment } from '../models/Shipment';
 import SavedQuote from '../models/SavedQuote';
 import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
+
+// Books the shipment with netParcel and attaches the returned label/tracking
+// number to the shipment doc. Used both by confirmPayment (synchronous, client-
+// initiated) and by the Stripe/PayPal webhooks as a safety net so a label still
+// gets generated if the client never calls confirm-payment after paying.
+// Does not save() — caller is responsible for persisting.
+export const generateLabelForShipment = async (shipment: IShipment): Promise<boolean> => {
+  try {
+    const pd = shipment.pickupDetails;
+    const ss = shipment.specialServices || {};
+    const shipDate = pd?.pickupDate || new Date().toISOString().split('T')[0];
+
+    const pickupBlock = pd?.method === 'schedule_pickup' ? {
+      location: pd.location || 'Front Door',
+      instructions: pd.instructions || '',
+      ready_time: { ready_hour: pd.readyHour || '09', ready_min: pd.readyMin || '00' },
+      close_time: { close_hour: pd.closeHour || '17', close_min: pd.closeMin || '00' },
+    } : undefined;
+
+    const refs = (shipment.references || []).map((r) => ({
+      reference_name: r.referenceName,
+      reference_value: r.referenceValue,
+    }));
+    refs.unshift({ reference_name: 'Order', reference_value: shipment.shipmentNumber });
+
+    const shipPayload = {
+      ship: {
+        origin: {
+          ...netparcelService.buildAddress(shipment.shipper),
+          address_type: shipment.shipper.isResidential ? 'residential' : null,
+        },
+        destination: {
+          ...netparcelService.buildAddress(shipment.recipient),
+          address_type: shipment.recipient.isResidential ? 'residential' : null,
+          email: shipment.recipient.email,
+          send_email_confirmation: !!shipment.recipient.email,
+        },
+        service: {
+          service_code: parseInt(shipment.selectedRate.serviceCode, 10) || shipment.selectedRate.serviceCode,
+          service_name: shipment.selectedRate.serviceName,
+        },
+        ship_date: shipDate,
+        pick_up: pickupBlock,
+        special_services: {
+          saturday_delivery: ss.saturdayDelivery || false,
+          signature_required: ss.signatureRequired || false,
+          adult_signature: ss.adultSignature || false,
+          hold_for_pickup: ss.holdForPickup || false,
+          inside_pickup: ss.insidePickup || false,
+          inside_delivery: ss.insideDelivery || false,
+          tailgate_pickup: ss.tailgatePickup || false,
+          tailgate_delivery: ss.tailgateDelivery || false,
+        },
+        packaging_information: netparcelService.buildPackagingInformation(shipment.parcels, shipment.packagingType),
+        references: refs.slice(0, 3),
+        generate_label: true,
+        customs_invoice: shipment.shipmentType === 'international' && shipment.customsInvoice ? {
+          tax_type: shipment.customsInvoice.taxType,
+          currency: shipment.customsInvoice.currency || 'CAD',
+          total_value: shipment.customsInvoice.totalValue,
+          products: (shipment.customsInvoice.products || []).map((p) => ({
+            quantity: p.quantity,
+            description: p.description,
+            hs_code: p.hsCode,
+            made_in: p.madeIn,
+            cusma: !!p.cusma,
+            section_232: !!p.section232,
+            unit_price: p.unitPrice,
+            total_price: p.totalPrice,
+          })),
+        } : undefined,
+      },
+    };
+
+    const npShipment = await netparcelService.createShipment(shipPayload);
+
+    shipment.netparcelOrderId = npShipment.order_id;
+    shipment.trackingNumber = npShipment.master_tracking_num;
+    shipment.labelUrl = npShipment.tracking_url;
+    shipment.status = pickupBlock ? 'pickup_scheduled' : 'label_generated';
+
+    const labelDoc = npShipment.documents?.find((d: any) => d.document_name === 'labels');
+    if (labelDoc?.base64_encoded_string) {
+      shipment.labelBase64 = labelDoc.base64_encoded_string;
+    }
+    return true;
+  } catch (labelErr) {
+    logger.warn(`Label generation failed for shipment ${shipment._id}, will need retry:`, labelErr);
+    shipment.status = 'label_pending';
+    return false;
+  }
+};
 
 const QUOTE_VALIDITY_DAYS: Record<'quick' | 'detailed', number> = {
   quick: 15,
@@ -269,7 +361,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       shipper, recipient, parcels, selectedRate,
       shipmentType, guestEmail, guestPhone,
       pickupDetails, specialServices, references,
-      packagingType,
+      packagingType, customsInvoice,
     } = req.body;
     const userId = (req as any).user?.userId;
 
@@ -289,6 +381,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       pickupDetails,
       specialServices,
       references,
+      customsInvoice,
       status: 'pending_payment',
       payment: {
         amount: selectedRate.totalCharge,
@@ -323,74 +416,9 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
     shipment.payment.paidAt = new Date();
     shipment.status = 'paid';
 
-    try {
-      const pd = shipment.pickupDetails;
-      const ss = shipment.specialServices || {};
-      const shipDate = pd?.pickupDate || new Date().toISOString().split('T')[0];
-
-      const pickupBlock = pd?.method === 'schedule_pickup' ? {
-        location: pd.location || 'Front Door',
-        instructions: pd.instructions || '',
-        ready_time: { ready_hour: pd.readyHour || '09', ready_min: pd.readyMin || '00' },
-        close_time: { close_hour: pd.closeHour || '17', close_min: pd.closeMin || '00' },
-      } : undefined;
-
-      const refs = (shipment.references || []).map((r) => ({
-        reference_name: r.referenceName,
-        reference_value: r.referenceValue,
-      }));
-      refs.unshift({ reference_name: 'Order', reference_value: shipment.shipmentNumber });
-
-      const shipPayload = {
-        ship: {
-          origin: {
-            ...netparcelService.buildAddress(shipment.shipper),
-            address_type: shipment.shipper.isResidential ? 'residential' : null,
-          },
-          destination: {
-            ...netparcelService.buildAddress(shipment.recipient),
-            address_type: shipment.recipient.isResidential ? 'residential' : null,
-            email: shipment.recipient.email,
-            send_email_confirmation: !!shipment.recipient.email,
-          },
-          service: {
-            service_code: parseInt(shipment.selectedRate.serviceCode, 10) || shipment.selectedRate.serviceCode,
-            service_name: shipment.selectedRate.serviceName,
-          },
-          ship_date: shipDate,
-          pick_up: pickupBlock,
-          special_services: {
-            saturday_delivery: ss.saturdayDelivery || false,
-            signature_required: ss.signatureRequired || false,
-            adult_signature: ss.adultSignature || false,
-            hold_for_pickup: ss.holdForPickup || false,
-            inside_pickup: ss.insidePickup || false,
-            inside_delivery: ss.insideDelivery || false,
-            tailgate_pickup: ss.tailgatePickup || false,
-            tailgate_delivery: ss.tailgateDelivery || false,
-          },
-          packaging_information: netparcelService.buildPackagingInformation(shipment.parcels, shipment.packagingType),
-          references: refs.slice(0, 3),
-          generate_label: true,
-        },
-      };
-
-      const npShipment = await netparcelService.createShipment(shipPayload);
-
-      shipment.netparcelOrderId = npShipment.order_id;
-      shipment.trackingNumber = npShipment.master_tracking_num;
-      shipment.labelUrl = npShipment.tracking_url;
-      shipment.status = pickupBlock ? 'pickup_scheduled' : 'label_generated';
-
-      const labelDoc = npShipment.documents?.find((d: any) => d.document_name === 'labels');
-      if (labelDoc?.base64_encoded_string) {
-        shipment.labelBase64 = labelDoc.base64_encoded_string;
-      }
-    } catch (labelErr) {
-      logger.warn('Label generation failed, shipment still marked as paid:', labelErr);
-      shipment.trackingNumber = `PC${Date.now()}`;
-      shipment.status = 'label_generated';
-    }
+    // Avoid double-booking with netParcel if the payment webhook already generated
+    // the label for this shipment in a race with this request.
+    const labelGenerated = shipment.netparcelOrderId ? true : await generateLabelForShipment(shipment);
 
     await shipment.save();
 
@@ -401,7 +429,9 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
 
     res.json({
       success: true,
-      message: 'Payment confirmed and label generated.',
+      message: labelGenerated
+        ? 'Payment confirmed and label generated.'
+        : 'Payment confirmed. Label generation failed and will be retried automatically.',
       shipment: {
         shipmentNumber: shipment.shipmentNumber,
         trackingNumber: shipment.trackingNumber,

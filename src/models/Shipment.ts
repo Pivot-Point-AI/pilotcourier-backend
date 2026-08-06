@@ -4,6 +4,7 @@ export type ShipmentStatus =
   | 'quote'
   | 'pending_payment'
   | 'paid'
+  | 'label_pending'
   | 'label_generated'
   | 'pickup_scheduled'
   | 'in_transit'
@@ -68,6 +69,24 @@ export interface IReference {
   referenceValue: string;
 }
 
+export interface ICustomsProduct {
+  quantity: number;
+  description: string;
+  hsCode?: string;
+  madeIn: string;
+  cusma?: boolean;
+  section232?: boolean;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+export interface ICustomsInvoice {
+  taxType?: string;
+  currency?: string;
+  totalValue?: number;
+  products: ICustomsProduct[];
+}
+
 export interface IRate {
   carrierId: string;
   carrierName: string;
@@ -97,6 +116,7 @@ export interface IShipment extends Document {
   pickupDetails?: IPickupDetails;
   specialServices?: ISpecialServices;
   references?: IReference[];
+  customsInvoice?: ICustomsInvoice;
   status: ShipmentStatus;
   trackingNumber?: string;
   labelUrl?: string;
@@ -197,6 +217,24 @@ const ReferenceSchema = new Schema<IReference>({
   referenceValue: { type: String },
 }, { _id: false });
 
+const CustomsProductSchema = new Schema<ICustomsProduct>({
+  quantity: { type: Number, required: true },
+  description: { type: String, required: true },
+  hsCode: { type: String },
+  madeIn: { type: String, required: true },
+  cusma: { type: Boolean, default: false },
+  section232: { type: Boolean, default: false },
+  unitPrice: { type: Number, required: true },
+  totalPrice: { type: Number, required: true },
+}, { _id: false });
+
+const CustomsInvoiceSchema = new Schema<ICustomsInvoice>({
+  taxType: { type: String },
+  currency: { type: String, default: 'CAD' },
+  totalValue: { type: Number },
+  products: [CustomsProductSchema],
+}, { _id: false });
+
 const ShipmentSchema = new Schema<IShipment>(
   {
     shipmentNumber: { type: String, required: true, unique: true },
@@ -213,10 +251,11 @@ const ShipmentSchema = new Schema<IShipment>(
     pickupDetails: { type: PickupDetailsSchema },
     specialServices: { type: SpecialServicesSchema },
     references: [ReferenceSchema],
+    customsInvoice: { type: CustomsInvoiceSchema },
     status: {
       type: String,
       enum: [
-        'quote', 'pending_payment', 'paid', 'label_generated',
+        'quote', 'pending_payment', 'paid', 'label_pending', 'label_generated',
         'pickup_scheduled', 'in_transit', 'out_for_delivery',
         'delivered', 'cancelled', 'refund_requested', 'refunded',
       ],

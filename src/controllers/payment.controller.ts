@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import Stripe from 'stripe';
 import axios from 'axios';
 import Shipment from '../models/Shipment';
+import { generateLabelForShipment } from './shipment.controller';
 import logger from '../utils/logger';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -56,13 +57,22 @@ export const stripeWebhook = async (req: Request, res: Response) => {
     const shipmentId = pi.metadata.shipmentId;
 
     if (shipmentId) {
-      await Shipment.findByIdAndUpdate(shipmentId, {
-        'payment.status': 'completed',
-        'payment.transactionId': pi.id,
-        'payment.method': 'stripe',
-        'payment.paidAt': new Date(),
-        status: 'paid',
-      });
+      const shipment = await Shipment.findById(shipmentId);
+      if (shipment) {
+        shipment.payment.status = 'completed';
+        shipment.payment.transactionId = pi.id;
+        shipment.payment.method = 'stripe';
+        shipment.payment.paidAt = new Date();
+        shipment.status = 'paid';
+
+        // Safety net: if the client never called confirm-payment, no label/booking
+        // exists yet — book it here so payment success always results in a label.
+        if (!shipment.netparcelOrderId) {
+          await generateLabelForShipment(shipment);
+        }
+
+        await shipment.save();
+      }
       logger.info(`Stripe payment confirmed for shipment ${shipmentId}`);
     }
   }
@@ -141,13 +151,20 @@ export const capturePayPalOrder = async (req: Request, res: Response, next: Next
     );
 
     if (capture.data.status === 'COMPLETED') {
-      await Shipment.findByIdAndUpdate(shipmentId, {
-        'payment.status': 'completed',
-        'payment.transactionId': orderId,
-        'payment.method': 'paypal',
-        'payment.paidAt': new Date(),
-        status: 'paid',
-      });
+      const shipment = await Shipment.findById(shipmentId);
+      if (shipment) {
+        shipment.payment.status = 'completed';
+        shipment.payment.transactionId = orderId;
+        shipment.payment.method = 'paypal';
+        shipment.payment.paidAt = new Date();
+        shipment.status = 'paid';
+
+        if (!shipment.netparcelOrderId) {
+          await generateLabelForShipment(shipment);
+        }
+
+        await shipment.save();
+      }
 
       return res.json({ success: true, message: 'Payment captured.' });
     }
