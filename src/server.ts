@@ -12,7 +12,8 @@ import logger from './utils/logger';
 
 const app = express();
 
-// ── Security ────────────────────────────────────────────────────────────────
+// ── Security ───────
+// ─────────────────────────────────────────────────────────
 app.use(helmet());
 const allowedOrigins = [
   'http://localhost:3000',
