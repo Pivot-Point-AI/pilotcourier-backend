@@ -188,14 +188,22 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       packagingType = 'My Packaging',
       freightClass,
       quoteType = 'quick',
+      packages,
     } = req.body;
 
     // Map frontend labels to valid netParcel packaging types
     const VALID_PACKAGING = ['My Packaging', 'Envelope', 'Pak', 'Pallet'];
     const resolvedPackaging = VALID_PACKAGING.includes(packagingType) ? packagingType : 'My Packaging';
 
+    // Multi-package shipments: use the full packages[] array when provided (each package
+    // rated individually by netParcel), falling back to the single flat weight/length/width/height
+    // fields for callers that don't send packages[] (e.g. resumed saved quotes).
+    const packageRows: any[] = Array.isArray(packages) && packages.length > 0
+      ? packages
+      : [{ length, width, height, weight, insuranceAmount, description, specialHandling, freightClass }];
+
     // netParcel's API requires freight_class whenever packaging_type is "Pallet"
-    if (resolvedPackaging === 'Pallet' && !freightClass) {
+    if (resolvedPackaging === 'Pallet' && packageRows.some((p) => !p.freightClass)) {
       return res.status(400).json({ success: false, message: 'Freight class is required for Pallet (LTL) shipments.' });
     }
 
@@ -261,26 +269,26 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         items: [{
           name: description || 'Package',
           quantity: 1,
-          weight: parseFloat(weight) || 0,
+          weight: packageRows.reduce((sum, p) => sum + (parseFloat(p.weight) || 0), 0),
           weightUnit: uom === 'I' ? 'lbs' : 'kg',
-          price: parseFloat(insuranceAmount) || 0,
+          price: packageRows.reduce((sum, p) => sum + (parseFloat(p.insuranceAmount) || 0), 0),
           requires_shipping: true,
           taxable: true,
         }],
         packaging_information: {
           packaging_type: resolvedPackaging,
           uom,
-          packages: [{
-            length: parseFloat(length) || 0,
-            width: parseFloat(width) || 0,
-            height: parseFloat(height) || 0,
-            weight: parseFloat(weight) || 0,
-            insurance_amount: parseFloat(insuranceAmount) || 0,
-            description: description || 'Package',
-            special_handling: !!specialHandling,
+          packages: packageRows.map((p) => ({
+            length: parseFloat(p.length) || 0,
+            width: parseFloat(p.width) || 0,
+            height: parseFloat(p.height) || 0,
+            weight: parseFloat(p.weight) || 0,
+            insurance_amount: parseFloat(p.insuranceAmount) || 0,
+            description: p.description || description || 'Package',
+            special_handling: !!p.specialHandling,
             // netParcel requires freight_class when packaging_type is "Pallet"
-            ...(resolvedPackaging === 'Pallet' && freightClass ? { freight_class: String(freightClass) } : {}),
-          }],
+            ...(resolvedPackaging === 'Pallet' && p.freightClass ? { freight_class: String(p.freightClass) } : {}),
+          })),
         },
       },
     };

@@ -26,6 +26,7 @@ export interface IAddress {
   phone: string;
   email?: string;
   isResidential?: boolean;
+  addressType?: 'consumer' | 'business';
 }
 
 export interface IParcel {
@@ -160,6 +161,7 @@ const AddressSchema = new Schema<IAddress>({
   phone: { type: String, required: true },
   email: { type: String },
   isResidential: { type: Boolean, default: false },
+  addressType: { type: String, enum: ['consumer', 'business'] },
 });
 
 const ParcelSchema = new Schema<IParcel>({
