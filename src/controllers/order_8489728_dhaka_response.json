@@ -1,0 +1,10 @@
+{
+  "rates": [
+    {"mode":1,"transit_days":"6","max_delivery_date":"2026-08-27","min_delivery_date":"2026-08-27","total_price":"158.87","service_name":"UPS Worldwide Expedited","service_code":"203","currency":"CAD","tarriff_price":"586.25"},
+    {"mode":1,"transit_days":"3","max_delivery_date":"2026-08-24","min_delivery_date":"2026-08-24","total_price":"179.54","service_name":"DHL Express","service_code":"301","currency":"CAD","tarriff_price":"597.02"},
+    {"mode":1,"transit_days":"4","max_delivery_date":"2026-08-25","min_delivery_date":"2026-08-25","total_price":"202.95","service_name":"UPS Worldwide Express Saver","service_code":"207","currency":"CAD","tarriff_price":"620.33"},
+    {"mode":1,"transit_days":"6","max_delivery_date":"2026-08-19","min_delivery_date":"2026-08-19","total_price":"309.49","service_name":"Purolator Express International","service_code":"2037","currency":"CAD","tarriff_price":"0.0"},
+    {"mode":1,"transit_days":"6","max_delivery_date":"2026-08-24","min_delivery_date":"2026-08-24","total_price":"736.36","service_name":"FedEx International Economy","service_code":"13","currency":"CAD","tarriff_price":"586.06"},
+    {"mode":1,"transit_days":"6","max_delivery_date":"2026-08-24","min_delivery_date":"2026-08-24","total_price":"812.23","service_name":"FedEx International Priority","service_code":"20","currency":"CAD","tarriff_price":"645.53"}
+  ]
+}

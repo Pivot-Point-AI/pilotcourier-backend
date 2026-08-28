@@ -180,6 +180,10 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       originProvince = '', destinationProvince = '',
       originCountry = 'CA', destinationCountry = 'CA',
       originResidential = false, destinationResidential = false,
+      originName = '', originCompany = '', originStreet = '', originStreet2 = '',
+      originPhone = '', originEmail = '',
+      destinationName = '', destinationCompany = '', destinationStreet = '', destinationStreet2 = '',
+      destinationPhone = '', destinationEmail = '',
       weight, weightUnit = 'lbs',
       length, width, height, dimensionUnit = 'in',
       description = 'Package',
@@ -188,6 +192,8 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       packagingType = 'My Packaging',
       freightClass,
       quoteType = 'quick',
+      pickupMethod, // 'schedule_pickup' | 'drop_off' | undefined
+      specialServices = {},
       packages,
     } = req.body;
 
@@ -234,8 +240,13 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     // Geo lookups (e.g. zippopotam.us) can return neighborhood-qualified names like
     // "Ajax East" for a postal code whose canonical municipality is "Ajax" — netParcel's
     // carrier-matching expects the canonical city, so strip trailing directional suffixes.
-    const cleanCity = (c: string) => (c || '').replace(/\s+(East|West|North|South)$/i, '').trim();
+    const cleanCity = (c: string) => (c || '').replace(/\s+(North\s?East|North\s?West|South\s?East|South\s?West|East|West|North|South)$/i, '').trim();
 
+    // netParcel rates UPS/FedEx/DHL dynamically based on full address, contact info,
+    // address type (residential/business), and Pickup vs Drop-Off — blank/omitted values
+    // here produce a different (and higher) rate than the Rate & Ship workflow, even
+    // when postal/city/province/package data match exactly. Populate everything the
+    // client has, and always send an explicit pick_up requirement.
     const ratePayload = {
       rate: {
         origin: {
@@ -243,28 +254,59 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           postal_code: cleanPostal(originPostal, originCountry) ?? '',
           province: cleanProvince(originProvince) ?? '',
           city: cleanCity(originCity),
-          name: '',
-          address1: '',
-          address2: '',
+          name: originName || '',
+          address1: originStreet || '',
+          address2: originStreet2 || '',
           address3: '',
-          phone: '',
+          phone: originPhone || '',
           fax: '',
-          address_type: originResidential ? 'residential' : '',
-          company_name: '',
+          address_type: originResidential ? 'residential' : 'business',
+          company_name: originCompany || '',
+          email: originEmail || undefined,
         },
         destination: {
           country: destinationCountry,
           postal_code: cleanPostal(destinationPostal, destinationCountry) ?? '',
           province: cleanProvince(destinationProvince) ?? '',
           city: cleanCity(destinationCity),
-          name: '',
-          address1: '',
-          address2: '',
+          name: destinationName || '',
+          address1: destinationStreet || '',
+          address2: destinationStreet2 || '',
           address3: '',
-          phone: '',
+          phone: destinationPhone || '',
           fax: '',
-          address_type: destinationResidential ? 'residential' : '',
-          company_name: '',
+          address_type: destinationResidential ? 'residential' : 'business',
+          company_name: destinationCompany || '',
+          email: destinationEmail || undefined,
+        },
+        // Explicit Pickup/Drop-Off — required by netParcel to match Rate & Ship pricing.
+        // Defaults to Pickup (matches the booking flow's default) when not specified.
+        pick_up: pickupMethod === 'drop_off'
+          ? { required: false }
+          : {
+              required: true,
+              location: req.body.pickupLocation || 'Front Door',
+              instructions: req.body.pickupInstructions || '',
+              ready_time: {
+                ready_hour: req.body.readyHour || '09',
+                ready_min: req.body.readyMin || '00',
+              },
+              close_time: {
+                close_hour: req.body.closeHour || '17',
+                close_min: req.body.closeMin || '00',
+              },
+            },
+        breakdown_rates: true,
+        // Special services affect UPS pricing significantly (confirmed: signature_required
+        // alone accounts for the entire UPS discrepancy vs. Rate & Ship — ~$10.85-10.92 on
+        // Worldwide Expedited/Express Saver for this route). Must mirror whatever the
+        // reference/actual shipment configuration uses, since carriers price it differently
+        // from DHL/FedEx/Purolator (which ignore it for rating purposes).
+        special_services: {
+          signature_required: !!specialServices.signatureRequired,
+          adult_signature: !!specialServices.adultSignature,
+          saturday_delivery: !!specialServices.saturdayDelivery,
+          hold_for_pickup: !!specialServices.holdForPickup,
         },
         items: [{
           name: description || 'Package',

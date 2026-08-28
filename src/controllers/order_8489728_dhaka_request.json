@@ -1,0 +1,59 @@
+{
+  "rate": {
+    "origin": {
+      "country": "CA",
+      "postal_code": "L1S 6L5",
+      "province": "ON",
+      "city": "Ajax",
+      "name": "",
+      "address1": "",
+      "address2": "",
+      "address3": "",
+      "phone": "",
+      "fax": "",
+      "address_type": "",
+      "company_name": ""
+    },
+    
+    "destination": {
+      "country": "BD",
+      "postal_code": "1212",
+      "province": "DHAKA",
+      "city": "Gulshan Model Town",
+      "name": "",
+      "address1": "",
+      "address2": "",
+      "address3": "",
+      "phone": "",
+      "fax": "",
+      "address_type": "",
+      "company_name": ""
+    },
+    "items": [
+      {
+        "name": "1 Sunglasses, 3 cleansing cream, 11 green tea toner, 2 sun cream, 3 Vaseline bright lotion.",
+        "quantity": 1,
+        "weight": 2.5,
+        "weightUnit": "kg",
+        "price": 450,
+        "requires_shipping": true,
+        "taxable": true
+      }
+    ],
+    "packaging_information": {
+      "packaging_type": "My Packaging",
+      "uom": "M",
+      "packages": [
+        {
+          "length": 27,
+          "width": 26,
+          "height": 11,
+          "weight": 2.5,
+          "insurance_amount": 450,
+          "description": "1 Sunglasses, 3 cleansing cream, 11 green tea toner, 2 sun cream, 3 Vaseline bright lotion.",
+          "special_handling": false
+        }
+      ]
+    }
+  }
+}

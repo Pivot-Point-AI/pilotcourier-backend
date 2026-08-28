@@ -1,0 +1,58 @@
+{
+  "rate": {
+    "origin": {
+      "country": "CA",
+      "postal_code": "L4W 2S7",
+      "province": "ON",
+      "city": "Mississauga",
+      "name": "",
+      "address1": "",
+      "address2": "",
+      "address3": "",
+      "phone": "",
+      "fax": "",
+      "address_type": "",
+      "company_name": ""
+    },
+    "destination": {
+      "country": "FI",
+      "postal_code": "65200",
+      "province": "",
+      "city": "Vaasa",
+      "name": "",
+      "address1": "",
+      "address2": "",
+      "address3": "",
+      "phone": "",
+      "fax": "",
+      "address_type": "",
+      "company_name": ""
+    },
+    "items": [
+      {
+        "name": "Package",
+        "quantity": 1,
+        "weight": 21,
+        "weightUnit": "kg",
+        "price": 0,
+        "requires_shipping": true,
+        "taxable": true
+      }
+    ],
+    "packaging_information": {
+      "packaging_type": "My Packaging",
+      "uom": "M",
+      "packages": [
+        {
+          "length": 68,
+          "width": 40,
+          "height": 38,
+          "weight": 21,
+          "insurance_amount": 0,
+          "description": "Package",
+          "special_handling": false
+        }
+      ]
+    }
+  }
+}

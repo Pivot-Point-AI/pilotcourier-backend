@@ -45,6 +45,8 @@ interface NpRateRequest {
     items?: any[];
     packaging_information: NpPackagingInformation;
     breakdown_rates?: boolean;
+    pick_up?: any;
+    special_services?: Record<string, any>;
   };
 }
 

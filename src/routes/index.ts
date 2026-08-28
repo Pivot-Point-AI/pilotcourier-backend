@@ -71,25 +71,48 @@ router.get('/geo/postal', async (req, res) => {
   const { country, postal } = req.query as { country: string; postal: string };
   if (!country || !postal) return res.status(400).json({ error: 'country and postal required' });
   try {
-    const postalClean = postal.trim().replace(/\s+/g, '').toUpperCase();
-    // For CA use the FSA (first 3 chars) — zippopotam.us has full CA FSA coverage
-    const lookupCode = country.toUpperCase() === 'CA' ? postalClean.slice(0, 3) : postalClean;
-    const r = await fetch(`https://api.zippopotam.us/${country.toLowerCase()}/${encodeURIComponent(lookupCode)}`);
+    const isCaUs = ['CA', 'US'].includes(country.toUpperCase());
+
+    if (isCaUs) {
+      const postalClean = postal.trim().replace(/\s+/g, '').toUpperCase();
+      // For CA use the FSA (first 3 chars) — zippopotam.us has full CA FSA coverage
+      const lookupCode = country.toUpperCase() === 'CA' ? postalClean.slice(0, 3) : postalClean;
+      const r = await fetch(`https://api.zippopotam.us/${country.toLowerCase()}/${encodeURIComponent(lookupCode)}`);
+      if (!r.ok) return res.json({ city: '', province: '' });
+      const data = await r.json() as any;
+      const place = data.places?.[0];
+      if (!place) return res.json({ city: '', province: '' });
+      let rawCity: string = place['place name'] || '';
+      // Some Canadian federal-government FSAs (e.g. K1A) resolve to descriptive
+      // administrative text like "Government of Canada Ottawa and Gatineau offices"
+      // instead of a real municipality — extract the actual city from that pattern.
+      const govMatch = rawCity.match(/^Government of Canada (.+?) offices$/i);
+      if (govMatch) rawCity = govMatch[1].split(/\s+and\s+/i)[0].trim();
+      const city = rawCity.replace(/\s*\(.*?\)\s*/g, '').replace(/\s+(North\s?East|North\s?West|South\s?East|South\s?West|East|West|North|South)$/i, '').trim();
+      return res.json({
+        city,
+        province: place['state abbreviation'] || place['state'] || '',
+      });
+    }
+
+    // zippopotam is only reliable at municipal (city) granularity for CA/US — for many
+    // other countries its "place name" resolves to a neighborhood/sub-area rather than
+    // the city (confirmed: Bangladesh postal 1212 -> "Gulshan Model Town" instead of
+    // "Dhaka"), and its "state" field returns administrative division names that aren't
+    // valid netParcel province codes. Sending either instead of the real city/blank
+    // province measurably skewed rates for carriers that validate those fields
+    // (Purolator ~11% higher, UPS residential/signature surcharge mismatches).
+    // Nominatim (OpenStreetMap) resolves to the correct city-level name instead
+    // (confirmed: BD 1212 -> address.city "Dhaka", with the wrong "Gulshan" correctly
+    // demoted to `suburb`). Used only for non-CA/US; province is intentionally left
+    // blank everywhere outside CA/US, matching how the real reference shipment worked.
+    const nomUrl = `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(postal)}&countrycodes=${encodeURIComponent(country.toLowerCase())}&format=json&addressdetails=1&accept-language=en&limit=1`;
+    const r = await fetch(nomUrl, { headers: { 'User-Agent': 'PilotCourier/1.0 (support@pilotcourier.com)' } });
     if (!r.ok) return res.json({ city: '', province: '' });
-    const data = await r.json() as any;
-    const place = data.places?.[0];
-    if (!place) return res.json({ city: '', province: '' });
-    let rawCity: string = place['place name'] || '';
-    // Some Canadian federal-government FSAs (e.g. K1A) resolve to descriptive
-    // administrative text like "Government of Canada Ottawa and Gatineau offices"
-    // instead of a real municipality — extract the actual city from that pattern.
-    const govMatch = rawCity.match(/^Government of Canada (.+?) offices$/i);
-    if (govMatch) rawCity = govMatch[1].split(/\s+and\s+/i)[0].trim();
-    const city = rawCity.replace(/\s*\(.*?\)\s*/g, '').replace(/\s+(East|West|North|South)$/i, '').trim();
-    res.json({
-      city,
-      province: place['state abbreviation'] || place['state'],
-    });
+    const results = await r.json() as any[];
+    const address = results?.[0]?.address;
+    const city = address?.city || address?.town || address?.municipality || '';
+    return res.json({ city, province: '' });
   } catch {
     res.json({ city: '', province: '' });
   }
