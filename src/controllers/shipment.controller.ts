@@ -229,11 +229,37 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       }
       return s;
     };
-    const cleanProvince = (p: string) => {
+    // Full US state / CA province names → their 2-letter codes. Needed because geo
+    // lookups and manually-typed forms often send the full name ("New York", "British
+    // Columbia") rather than a code — the old "take the first word" fallback silently
+    // turned "New York" into "NEW", an invalid state code that made UPS return zero
+    // rates for the whole shipment while other carriers tolerated it.
+    const US_STATE_CODES: Record<string, string> = {
+      ALABAMA: 'AL', ALASKA: 'AK', ARIZONA: 'AZ', ARKANSAS: 'AR', CALIFORNIA: 'CA',
+      COLORADO: 'CO', CONNECTICUT: 'CT', DELAWARE: 'DE', FLORIDA: 'FL', GEORGIA: 'GA',
+      HAWAII: 'HI', IDAHO: 'ID', ILLINOIS: 'IL', INDIANA: 'IN', IOWA: 'IA',
+      KANSAS: 'KS', KENTUCKY: 'KY', LOUISIANA: 'LA', MAINE: 'ME', MARYLAND: 'MD',
+      MASSACHUSETTS: 'MA', MICHIGAN: 'MI', MINNESOTA: 'MN', MISSISSIPPI: 'MS', MISSOURI: 'MO',
+      MONTANA: 'MT', NEBRASKA: 'NE', NEVADA: 'NV', 'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ',
+      'NEW MEXICO': 'NM', 'NEW YORK': 'NY', 'NORTH CAROLINA': 'NC', 'NORTH DAKOTA': 'ND', OHIO: 'OH',
+      OKLAHOMA: 'OK', OREGON: 'OR', PENNSYLVANIA: 'PA', 'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC',
+      'SOUTH DAKOTA': 'SD', TENNESSEE: 'TN', TEXAS: 'TX', UTAH: 'UT', VERMONT: 'VT',
+      VIRGINIA: 'VA', WASHINGTON: 'WA', 'WEST VIRGINIA': 'WV', WISCONSIN: 'WI', WYOMING: 'WY',
+      'DISTRICT OF COLUMBIA': 'DC',
+    };
+    const CA_PROVINCE_CODES: Record<string, string> = {
+      ALBERTA: 'AB', 'BRITISH COLUMBIA': 'BC', MANITOBA: 'MB', 'NEW BRUNSWICK': 'NB',
+      'NEWFOUNDLAND AND LABRADOR': 'NL', 'NORTHWEST TERRITORIES': 'NT', 'NOVA SCOTIA': 'NS', NUNAVUT: 'NU',
+      ONTARIO: 'ON', 'PRINCE EDWARD ISLAND': 'PE', QUEBEC: 'QC', SASKATCHEWAN: 'SK', YUKON: 'YT',
+    };
+    const cleanProvince = (p: string, country?: string) => {
       const s = (p || '').trim();
       if (!s) return null;
+      const upper = s.toUpperCase();
+      if ((country || 'CA') === 'US' && US_STATE_CODES[upper]) return US_STATE_CODES[upper];
+      if ((country || 'CA') === 'CA' && CA_PROVINCE_CODES[upper]) return CA_PROVINCE_CODES[upper];
       // If it's already a short code (≤3 chars) use as-is
-      if (s.length <= 3) return s.toUpperCase();
+      if (s.length <= 3) return upper;
       // Otherwise take the first word as the code (e.g. "NWFP Peshawar" → "NWFP")
       return s.split(/\s+/)[0].toUpperCase();
     };
@@ -252,7 +278,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         origin: {
           country: originCountry,
           postal_code: cleanPostal(originPostal, originCountry) ?? '',
-          province: cleanProvince(originProvince) ?? '',
+          province: cleanProvince(originProvince, originCountry) ?? '',
           city: cleanCity(originCity),
           name: originName || '',
           address1: originStreet || '',
@@ -267,7 +293,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         destination: {
           country: destinationCountry,
           postal_code: cleanPostal(destinationPostal, destinationCountry) ?? '',
-          province: cleanProvince(destinationProvince) ?? '',
+          province: cleanProvince(destinationProvince, destinationCountry) ?? '',
           city: cleanCity(destinationCity),
           name: destinationName || '',
           address1: destinationStreet || '',
