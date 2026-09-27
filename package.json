@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "test:shipping": "npm run build && node --test tests/postal.test.cjs tests/shipping-regressions.test.cjs",
-    "test:postal": "npm run build && node --test tests/postal.test.cjs",
+    "test:shipping": "npm run build && node --test tests/postal.test.cjs tests/postal-replay.test.cjs tests/postal-frontend.test.cjs tests/shipping-regressions.test.cjs",
+    "test:postal": "npm run build && node --test tests/postal.test.cjs tests/postal-replay.test.cjs tests/postal-frontend.test.cjs",
     "start": "node dist/server.js",
     "seed": "ts-node src/utils/seed.ts"
   },

@@ -6,6 +6,38 @@ export interface PostalResult {
   source?: string;
 }
 
+// OSM administrative levels differ by country. Explicit fallbacks prevent a
+// lower-level municipality from being mistaken for a province. Retain level 4
+// wherever it already supplies a country-matching subdivision.
+const SUBDIVISION_FALLBACK_LEVELS: Record<string, readonly number[]> = {
+  PT: [6],       // districts
+  IS: [5],       // regions, not level-6 municipalities
+  IE: [6],       // counties, not level-5 historical provinces
+  HU: [6, 8],    // counties and county-status cities (including Budapest)
+  GR: [5],       // administrative regions
+  SI: [8],       // municipalities are the ISO subdivisions
+  EE: [6],       // counties, not level-7 municipalities
+  LV: [5],       // municipalities and state cities
+  LU: [6],       // cantons
+  CY: [5],       // districts
+  RS: [6],       // districts, including Belgrade
+  AL: [6],       // counties
+  PH: [3],       // Metro Manila (00); other provinces already use level 4
+};
+
+function provinceCode(country: string, address: Record<string, unknown> | undefined): string {
+  for (const level of [4, ...(SUBDIVISION_FALLBACK_LEVELS[country] || [])]) {
+    const code = address?.[`ISO3166-2-lvl${level}`];
+    // Metro Manila is accepted as a province-equivalent in address metadata;
+    // other Philippine regions must not replace an unknown province.
+    if (country === 'PH' && level === 3 && code !== 'PH-00') continue;
+    if (typeof code === 'string' && new RegExp(`^${country}-[A-Z0-9]{1,3}$`).test(code)) {
+      return code.slice(country.length + 1);
+    }
+  }
+  return '';
+}
+
 function fallbackCity(place: any): string {
   // GeoNames adds district and government-mail qualifiers to municipality names.
   // Only normalize fallback labels; never rewrite the user's address here.
@@ -38,10 +70,7 @@ export async function lookupPostal(country: string, postal: string): Promise<Pos
       const results = await response.json() as any[];
       const a = results?.[0]?.address;
       exact = { city: a?.city || a?.town || a?.municipality || a?.village || '',
-        // Match the country subdivision codes used by the province dropdown.
-        // Do not substitute county/district names for a missing province code.
-        province: typeof a?.['ISO3166-2-lvl4'] === 'string' && a['ISO3166-2-lvl4'].startsWith(`${country}-`)
-          ? a['ISO3166-2-lvl4'].slice(country.length + 1) : '', source: 'nominatim' };
+        province: provinceCode(country, a), source: 'nominatim' };
     }
   } catch { /* A timeout or provider outage must still allow the fallback. */ }
   if (country !== 'CA' || (exact.city && exact.province)) return exact;
