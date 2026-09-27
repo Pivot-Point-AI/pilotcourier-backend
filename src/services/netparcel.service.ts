@@ -240,6 +240,9 @@ class NetParcelService {
       dimensionUnit: string;
       description: string;
       declaredValue?: number;
+      insuranceAmount?: number;
+      specialHandling?: boolean;
+      freightClass?: string;
     }>,
     packagingType = 'My Packaging',
   ): NpPackagingInformation {
@@ -255,8 +258,10 @@ class NetParcelService {
         width: p.width,
         height: p.height,
         weight: p.weight,
-        insurance_amount: p.declaredValue || 0,
+        insurance_amount: p.insuranceAmount ?? p.declaredValue ?? 0,
         description: p.description || 'Package',
+        special_handling: !!p.specialHandling,
+        ...(packagingType === 'Pallet' && p.freightClass ? { freight_class: String(p.freightClass) } : {}),
       })),
     };
   }

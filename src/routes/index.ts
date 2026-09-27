@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getPostal } from '../controllers/geo.controller';
 import {
   register, login, getMe, updateProfile, updateFullProfile,
   forgotPassword, resetPassword,
@@ -67,45 +68,8 @@ router.patch('/admin/shipments/:id/price', authenticate, requireAdmin, overrideP
 router.get('/admin/users', authenticate, requireAdmin, getAllUsers);
 
 // ── Geo lookups (proxy to netParcel) ─────────────────────────────────────────
-// Previously used zippopotam.us, but it proved unreliable at the exact
-// municipality-name granularity netParcel/UPS rating validates against:
-// - Compound directional suffixes ("Ajax Southwest" instead of "Ajax")
-// - "Downtown "-prefixed / " City"-suffixed noise for major metros
-//   ("Downtown Toronto" instead of "Toronto", "New York City" instead of
-//   "New York") — confirmed to cost a flat ~$2.50 UPS-only surcharge across
-//   every UPS service tier, consistent with UPS's address-validation/
-//   correction fee, not a zone-pricing difference (other carriers unaffected).
-// - Neighborhood-level substitution outside CA/US ("Gulshan Model Town"
-//   instead of "Dhaka" for Bangladesh) plus non-shippable division names
-//   returned as "province" (e.g. "Dhaka" division) — confirmed to cost an
-//   ~11% Purolator international-rate mismatch.
-// Nominatim (OpenStreetMap) resolves all of the above correctly and
-// consistently across CA/US/international (confirmed via direct testing:
-// Toronto, New York, and Dhaka all come back clean), so it's now the sole
-// source for this lookup.
-router.get('/geo/postal', async (req, res) => {
-  const { country, postal } = req.query as { country: string; postal: string };
-  if (!country || !postal) return res.status(400).json({ error: 'country and postal required' });
-  try {
-    const isCaUs = ['CA', 'US'].includes(country.toUpperCase());
-    const nomUrl = `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(postal)}&countrycodes=${encodeURIComponent(country.toLowerCase())}&format=json&addressdetails=1&accept-language=en&limit=1`;
-    const r = await fetch(nomUrl, { headers: { 'User-Agent': 'PilotCourier/1.0 (support@pilotcourier.com)' } });
-    if (!r.ok) return res.json({ city: '', province: '' });
-    const results = await r.json() as any[];
-    const address = results?.[0]?.address;
-    const city = address?.city || address?.town || address?.municipality || address?.village || '';
-    // ISO3166-2-lvl4 comes back as e.g. "CA-ON" or "US-NY" — the part after the
-    // hyphen is exactly the province/state abbreviation netParcel expects. Only
-    // trust this for CA/US, where it's a real 2-letter code; other countries'
-    // "state" values are administrative division names, not shippable codes
-    // (matches the reference shipment, which left province blank for BD).
-    const isoCode: string = address?.['ISO3166-2-lvl4'] || '';
-    const province = isCaUs ? (isoCode.split('-')[1] || '') : '';
-    return res.json({ city, province });
-  } catch {
-    res.json({ city: '', province: '' });
-  }
-});
+// Exact lookup first; Canadian FSA fallback fills gaps in provider coverage.
+router.get('/geo/postal', getPostal);
 
 // Country ISO code → full name map for countriesnow API
 const COUNTRY_NAMES: Record<string, string> = {

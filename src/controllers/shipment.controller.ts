@@ -5,6 +5,7 @@ import SavedQuote from '../models/SavedQuote';
 import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
+import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
 
 // Books the shipment with netParcel and attaches the returned label/tracking
 // number to the shipment doc. Used both by confirmPayment (synchronous, client-
@@ -28,7 +29,8 @@ export const generateLabelForShipment = async (shipment: IShipment): Promise<boo
       reference_name: r.referenceName,
       reference_value: r.referenceValue,
     }));
-    refs.unshift({ reference_name: 'Order', reference_value: shipment.shipmentNumber });
+    // Customer references take priority over the optional internal order reference.
+    if (refs.length < 3) refs.push({ reference_name: 'Order', reference_value: shipment.shipmentNumber });
 
     const shipPayload = {
       ship: {
@@ -154,21 +156,6 @@ const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDat
   today.setHours(0, 0, 0, 0);
   const diff = Math.ceil((delivery.getTime() - today.getTime()) / 86400000);
   return Math.max(diff, 1);
-};
-
-const tagRates = (rates: any[]) => {
-  if (!rates.length) return rates;
-  const cheapest = [...rates].sort((a, b) => a.totalCharge - b.totalCharge)[0];
-  const fastest = rates.reduce((a, b) => (a.transitDays < b.transitDays ? a : b));
-  const bestValue = rates.reduce((a, b) =>
-    a.totalCharge / Math.max(a.transitDays, 1) < b.totalCharge / Math.max(b.transitDays, 1) ? a : b
-  );
-  return rates.map((r) => ({
-    ...r,
-    isCheapest: r.serviceCode === cheapest.serviceCode,
-    isFastest: r.serviceCode === fastest.serviceCode,
-    isBestValue: r.serviceCode === bestValue.serviceCode,
-  }));
 };
 
 // ── POST /api/shipments/rates ────────────────────────────────────────────────
@@ -388,15 +375,9 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       serviceName: r.service_name,
       totalCharge: applyMarkup(parseNpPrice(r.total_price)),
       tariffPrice: parseNpPrice(r.tarriff_price || r.tariff_price || 0),
-      currency: r.currency || 'CAD',
+      currency: String(r.currency || 'CAD').trim().toUpperCase(),
       transitDays: calcTransitDays(r.transit_days, r.min_delivery_date, r.max_delivery_date),
-      estimatedDelivery: (() => {
-        const d = r.max_delivery_date || r.min_delivery_date || '';
-        // Handle "21 May 2026" → parse to ISO, handle "2026-05-21" → use as-is
-        if (!d) return '';
-        const parsed = new Date(d);
-        return isNaN(parsed.getTime()) ? d : parsed.toISOString().split('T')[0];
-      })(),
+      estimatedDelivery: normalizeDeliveryDate(r.max_delivery_date || r.min_delivery_date || ''),
       mode: r.mode, // 1=Express, 2=Ground
     }));
 
@@ -440,6 +421,10 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       packagingType, customsInvoice,
     } = req.body;
     const userId = (req as any).user?.userId;
+
+    if (references !== undefined && (!Array.isArray(references) || references.length > 3)) {
+      return res.status(400).json({ success: false, message: 'A maximum of three customer references is supported.' });
+    }
 
     const shipmentNumber = generateShipmentNumber();
 

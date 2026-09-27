@@ -40,6 +40,7 @@ export interface IParcel {
   declaredValue?: number;
   insuranceAmount?: number;
   specialHandling?: boolean;
+  freightClass?: string;
   quantity: number;
 }
 
@@ -175,6 +176,7 @@ const ParcelSchema = new Schema<IParcel>({
   declaredValue: { type: Number },
   insuranceAmount: { type: Number, default: 0 },
   specialHandling: { type: Boolean, default: false },
+  freightClass: { type: String },
   quantity: { type: Number, default: 1 },
 });
 
