@@ -27,9 +27,9 @@ const booking={shipper:address,recipient:address,parcels:[parcel],selectedRate:r
 function document(){return new Shipment({_id:id,userId:owner,shipmentNumber:'PC-TEST',...booking,status:'pending_payment',payment:{amount:600,currency:'CAD',priceVerified:true,status:'pending',stripeIntentId:'pi_test',paypalOrderId:'PPTEST'}});}
 function intent(s=document()){return {id:'pi_test',metadata:{shipmentId:String(s._id),userId:String(s.userId)},status:'succeeded',currency:'cad',amount:60000,amount_received:60000};}
 function paypal(){return {id:'PPTEST',status:'COMPLETED',purchase_units:[{custom_id:id,reference_id:'PC-TEST',amount:{currency_code:'CAD',value:'600.00'},payments:{captures:[{status:'COMPLETED',amount:{currency_code:'CAD',value:'600.00'}}]}}]};}
-async function invoke(fn,{body={},params={id},user={userId:owner},headers={}}={}){
+async function invoke(fn,{body={},params={id},user={userId:owner},headers={},query={}}={}){
  let status=200,data;const res={status(n){status=n;return this},json(v){data=v;return this},send(v){data=v;return this}};
- await fn({body,params,user,headers},res,e=>{status=e.statusCode||500;data={success:false,message:e.message}});return {status,data};
+ await fn({body,params,user,headers,query},res,e=>{status=e.statusCode||500;data={success:false,message:e.message}});return {status,data};
 }
 for(const amount of ['499.99','500','501','600.00','1000',10000])test(`decimal price ${amount} retains documented units`,async()=>{
  stub(carrier,'getRates',async()=>[{...raw,total_price:amount}]);const r=await invoke(controller.getRates,{body:quote});assert.equal(r.status,200);assert.equal(r.data.rates[0].totalCharge,Number(amount));
@@ -111,6 +111,40 @@ test('package inputs accept two decimals and volumetric weight uses one factor i
  }
  assert.match(fs.readFileSync('../frontend/src/lib/dim-weight.ts','utf8'),/cm: 5000, in: 139/);
  assert.ok(Math.abs(5000/16.387064/2.20462262-139)/139<0.005,'5000 cm3/kg and 139 in3/lb must describe the same density');
+});
+test('signed-in requests with malformed shipment IDs get 400 on every customer route, never reaching the database',async()=>{
+ const express=require('express'),jwt=require('jsonwebtoken'),router=require('../dist/routes').default;const app=express();app.use(express.json());app.use('/api',router);app.use(errorHandler);
+ stub(Shipment,'findById',()=>assert.fail('invalid ID reached database'));
+ const auth={authorization:'Bearer '+jwt.sign({userId:owner,role:'customer'},process.env.JWT_SECRET||'fallback_secret'),'content-type':'application/json'};
+ const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});
+ try{const base=`http://127.0.0.1:${server.address().port}/api/shipments/not-an-id`;
+  for(const [method,path,body] of [['GET','/label'],['GET','/invoice'],['POST','/cancel','{}'],['POST','/confirm-payment','{"method":"stripe","transactionId":"pi_x"}']]){
+   const r=await fetch(base+path,{method,headers:auth,body});assert.equal(r.status,400,method+' '+path);assert.doesNotMatch(JSON.stringify(await r.json()),/Cast to ObjectId|stack/,path)}
+ }finally{await new Promise(resolve=>server.close(resolve))}
+});
+function historyQuery(){const calls={};stub(Shipment,'countDocuments',async()=>0);stub(Shipment,'find',q=>{calls.query=q;const chain={sort(s){calls.sort=s;return chain},skip(){return chain},limit(){return chain},lean:async()=>[]};return chain});return calls}
+test('shipment history applies Include Cancelled and every sort order on the server',async()=>{
+ let c=historyQuery();assert.equal((await invoke(controller.getMyShipments,{query:{excludeStatus:'cancelled'}})).status,200);assert.deepEqual(c.query.status,{$ne:'cancelled'});assert.deepEqual(c.sort,{createdAt:-1});
+ c=historyQuery();await invoke(controller.getMyShipments,{query:{sortBy:'createdAt_asc'}});assert.deepEqual(c.sort,{createdAt:1});assert.equal(c.query.status,undefined);
+ c=historyQuery();await invoke(controller.getMyShipments,{query:{sortBy:'amount_desc'}});assert.deepEqual(c.sort,{'payment.amount':-1,createdAt:-1});
+ c=historyQuery();await invoke(controller.getMyShipments,{query:{sortBy:'amount_asc',status:'cancelled',excludeStatus:'cancelled'}});assert.deepEqual(c.sort,{'payment.amount':1,createdAt:-1});assert.equal(c.query.status,'cancelled');
+ c=historyQuery();await invoke(controller.getMyShipments,{query:{sortBy:'password',status:{$ne:'x'}}});assert.deepEqual(c.sort,{createdAt:-1});assert.equal(c.query.status,undefined);
+ const page=fs.readFileSync('../frontend/src/app/account/shipments/page.tsx','utf8');assert.match(page,/\n\s+sortBy,\r?\n/);assert.doesNotMatch(page,/list\].sort\(/);
+});
+test('recipient confirmation e-mail follows the booking choice',async()=>{
+ let sent;stub(carrier,'createShipment',async p=>{sent=p;return{order_id:1,documents:[]}});
+ const s=document();s.recipient.email='recipient@example.com';await controller.generateLabelForShipment(s);assert.equal(sent.ship.destination.send_email_confirmation,true);
+ s.notifyRecipient=false;await controller.generateLabelForShipment(s);assert.equal(sent.ship.destination.send_email_confirmation,false);
+ let saved;stub(carrier,'getRates',async()=>[raw]);stub(Shipment,'create',async data=>{saved=data;return new Shipment(data)});
+ await invoke(controller.bookShipment,{body:{...booking,notifyRecipient:false}});assert.equal(saved.notifyRecipient,false);
+ await invoke(controller.bookShipment,{body:booking});assert.equal(saved.notifyRecipient,true);
+});
+test('booking form has no controls that report success or do nothing',()=>{
+ const step=fs.readFileSync('../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx','utf8'),panel=fs.readFileSync('../frontend/src/app/booking/_components/AddressPanel.tsx','utf8');
+ assert.doesNotMatch(step,/saved as draft/);assert.match(step,/onClick=\{handleSaveDraft\}/);
+ for(const [name,src] of [['ShipmentDetailsStep',step],['AddressPanel',panel]])for(const box of src.match(/<input type="checkbox"[^>]*>/g))assert.match(box,/checked=\{/,name+': '+box);
+ for(const field of panel.match(/<input\b[^>]*>/g))assert.match(field,/value=|checked=/,'AddressPanel input without state: '+field);
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/authApi\.addAddress\(/);assert.match(client,/notifyRecipient,\r?\n/);assert.match(client,/writeLocal\(pickupPrefKey/);
 });
 test('database casting errors have safe response',()=>{let response;errorHandler(Object.assign(new Error('Cast to ObjectId failed secret'),{name:'CastError'}),{method:'GET',path:'/'},{status(n){assert.equal(n,400);return this},json(v){response=v}},()=>{});assert.deepEqual(response,{success:false,message:'Invalid identifier.'})});
 test('invoice endpoint returns actual PDF without fetching a label',async()=>{const s=document();s.payment.status='completed';s.createdAt=new Date('2026-09-28');stub(Shipment,'findById',async()=>s);stub(carrier,'getOrder',()=>assert.fail('label fetch'));const r=await invoke(downloadInvoice);assert.equal(r.status,200);assert.match(r.data.invoice,/^data:application\/pdf;base64,/);const pdf=Buffer.from(r.data.invoice.split(',')[1],'base64');assert.equal(pdf.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.includes(Buffer.from('Invoice NPI')));assert.equal(r.data.label,undefined)});
