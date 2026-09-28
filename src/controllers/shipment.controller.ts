@@ -153,6 +153,14 @@ const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDat
   return Math.max(diff, 1);
 };
 
+// P.O. Box, case postale, general delivery / poste restante. "Box" alone needs a number so "Boxwood Dr" passes.
+const PO_BOX = /\b(?:p\.?\s*o\.?\s*box|post\s+office\s+box|postal\s+box|box\s*#?\s*\d+|c\.?\s*p\.?\s+\d+|case\s+postale|general\s+delivery|poste\s+restante)\b/i;
+// First letter of a Canadian postal code -> province/territory (X is shared by NT and NU).
+const CA_POSTAL_PROVINCES: Record<string, string[]> = {
+  A: ['NL'], B: ['NS'], C: ['PE'], E: ['NB'], G: ['QC'], H: ['QC'], J: ['QC'], K: ['ON'], L: ['ON'], M: ['ON'], N: ['ON'], P: ['ON'],
+  R: ['MB'], S: ['SK'], T: ['AB'], V: ['BC'], X: ['NT', 'NU'], Y: ['YT'],
+};
+
 // A future pickup is priced differently (e.g. UPS pickup charge), so the pickup date is sent as the ship date,
 // as netParcel's Rate & Ship form does. Malformed or past dates are left out and netParcel prices for today.
 const todayInToronto = (): string => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
@@ -291,6 +299,30 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     // carrier-matching expects the canonical city, so strip trailing directional suffixes.
     const cleanCity = (c: string) => (c || '').replace(/\s+(North\s?East|North\s?West|South\s?East|South\s?West|East|West|North|South)$/i, '').trim();
 
+    // Address checks netParcel's API does not do at quote time (its Rate & Ship form does): couriers cannot pick up
+    // from or deliver to a P.O. Box, and a Canadian postal code's first letter fixes the province.
+    for (const [label, street, street2] of [
+      ['Pickup', originStreet, originStreet2],
+      ['Delivery', destinationStreet, destinationStreet2],
+    ]) {
+      if (PO_BOX.test(`${street || ''} ${street2 || ''}`)) {
+        return res.status(400).json({ success: false,
+          message: `${label} address identified as a P.O. Box. Please enter a street address; couriers cannot use P.O. Boxes and address correction fees may apply.` });
+      }
+    }
+    for (const [label, country, postal, province] of [
+      ['Origin', originCountry, originPostal, originProvince],
+      ['Destination', destinationCountry, destinationPostal, destinationProvince],
+    ]) {
+      if (country !== 'CA') continue;
+      const expected = CA_POSTAL_PROVINCES[String(postal || '').trim().toUpperCase().charAt(0)];
+      const prov = cleanProvince(province, 'CA');
+      if (expected && prov && !expected.includes(prov)) {
+        return res.status(400).json({ success: false,
+          message: `${label} postal code ${String(postal).trim().toUpperCase()} belongs to ${expected.join(' or ')}, not ${prov}. Please check the province or postal code.` });
+      }
+    }
+
     // netParcel rates UPS/FedEx/DHL dynamically based on full address, contact info,
     // address type (residential/business), and Pickup vs Drop-Off — blank/omitted values
     // here produce a different (and higher) rate than the Rate & Ship workflow, even
@@ -394,13 +426,23 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     logger.info('netParcel rate payload: ' + JSON.stringify(ratePayload));
 
     let npRates;
+    let notice: string | undefined;
     try {
       npRates = await netparcelService.getRates(ratePayload);
       // Exclude netParcel's own generic/non-bookable "Preferred Pickup" placeholder rate (code 380000, no tariff)
       npRates = npRates.filter((r: any) => r.service_code !== '380000');
+      // Purolator rejects Hold for Pickup with "signature not required" (netParcel's form refuses the whole quote), yet
+      // the API still prices it. Drop Purolator for that combination rather than offer services that fail at booking.
+      if (specialServices.holdForPickup && !specialServices.signatureRequired && !specialServices.adultSignature) {
+        const before = npRates.length;
+        npRates = npRates.filter((r: any) => !/^purolator\b/i.test(String(r.service_name || '')));
+        if (npRates.length < before) notice = 'Purolator is not available with Hold for Pickup unless a signature is required.';
+      }
       logger.info(`netParcel returned ${npRates.length} rates`);
       if (!npRates.length) {
-        const message = 'No carrier returned a rate for these shipment details. Review the package weight, dimensions, packaging type, requested services and route, or contact support.';
+        const message = notice
+          ? `${notice} No other carrier serves this shipment; require a signature or turn off Hold for Pickup.`
+          : 'No carrier returned a rate for these shipment details. Review the package weight, dimensions, packaging type, requested services and route, or contact support.';
         return res.status(422).json({ success: false, message });
       }
     } catch (err: any) {
@@ -447,7 +489,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       }
     }
 
-    res.json({ success: true, rates, count: rates.length });
+    res.json({ success: true, rates, count: rates.length, ...(notice ? { notice } : {}) });
   } catch (error) {
     next(error);
   }
