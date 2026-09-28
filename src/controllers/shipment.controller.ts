@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import Shipment, { IShipment } from '../models/Shipment';
 import SavedQuote from '../models/SavedQuote';
-import netparcelService, { CUSTOMS_EXPORT_REASONS, CUSTOMS_TAX_TYPES, envelopePackage } from '../services/netparcel.service';
+import netparcelService, { CUSTOMS_EXPORT_REASONS, CUSTOMS_TAX_TYPES, DEFAULT_EXPORT_REASON, envelopePackage } from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
@@ -515,8 +515,9 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       throw requestError(400, 'Addresses, packages and a selected service are required.');
     }
     if (shipmentType === 'international' && customsInvoice) {
+      customsInvoice.reasonForExport = customsInvoice.reasonForExport || DEFAULT_EXPORT_REASON;
       if (!CUSTOMS_EXPORT_REASONS.includes(customsInvoice.reasonForExport)) {
-        throw requestError(400, 'Select a reason for export for the customs invoice.');
+        throw requestError(400, 'Unsupported reason for export for the customs invoice.');
       }
       if (customsInvoice.taxType && customsInvoice.taxType !== 'None' && !CUSTOMS_TAX_TYPES.includes(customsInvoice.taxType)) {
         throw requestError(400, 'Unsupported tax ID type for the customs invoice.');

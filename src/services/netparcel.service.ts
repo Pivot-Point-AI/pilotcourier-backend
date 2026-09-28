@@ -78,10 +78,13 @@ export const envelopePackage = <T extends object>(base: T, uom: 'I' | 'M') => {
 // customs_invoice per netParcel JSON API Developer Guide v2.2 (items / harmonized_code / origin_country_code).
 // Tax type codes follow netParcel's own Rate & Ship form.
 export const CUSTOMS_EXPORT_REASONS = ['Sale', 'Sample', 'Repair', 'Gift', 'Return', 'Other'];
+// netParcel's own Rate & Ship form never asks for a reason for export, but the API requires one for
+// international non-document shipments, so the customer isn't asked either and Sale is sent.
+export const DEFAULT_EXPORT_REASON = 'Sale';
 export const CUSTOMS_TAX_TYPES = ['EIN', 'GBVAT', 'IOSS', 'SSN', 'VAT', 'VOEC'];
 
 interface NpCustomsInvoice {
-  reason_for_export?: string;
+  reason_for_export: string;
   invoice_currency: string;
   tax_type?: string;
   tax_id?: string;
@@ -329,7 +332,7 @@ class NetParcelService {
   }): NpCustomsInvoice {
     const taxType = invoice.taxType && CUSTOMS_TAX_TYPES.includes(invoice.taxType) ? invoice.taxType : undefined;
     return {
-      ...(invoice.reasonForExport ? { reason_for_export: invoice.reasonForExport } : {}),
+      reason_for_export: invoice.reasonForExport || DEFAULT_EXPORT_REASON,
       invoice_currency: invoice.currency || 'CAD',
       ...(taxType ? { tax_type: taxType } : {}),
       ...(taxType && invoice.taxId ? { tax_id: invoice.taxId } : {}),

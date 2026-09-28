@@ -93,17 +93,21 @@ test('international customs invoice uses the documented netParcel field names',a
  await controller.generateLabelForShipment(s);
  assert.deepEqual(sent.ship.customs_invoice,{reason_for_export:'Sale',invoice_currency:'USD',tax_type:'VAT',tax_id:'GB123456789',items:[{description:'Cotton T-shirt',harmonized_code:'6109.10',origin_country_code:'CA',quantity:2,unit_price:20,cusma:true}]});
  s.customsInvoice.taxType='HST';await controller.generateLabelForShipment(s);assert.equal(sent.ship.customs_invoice.tax_type,undefined);assert.equal(sent.ship.customs_invoice.tax_id,undefined);
+ delete s.customsInvoice.reasonForExport;await controller.generateLabelForShipment(s);assert.equal(sent.ship.customs_invoice.reason_for_export,'Sale');
 });
-test('international booking requires reason for export and HS codes before re-rating',async()=>{
+test('international booking defaults reason for export to Sale and requires HS codes before re-rating',async()=>{
  stub(carrier,'getRates',()=>assert.fail('carrier'));stub(Shipment,'create',()=>assert.fail('database'));
  const product={quantity:1,description:'Cotton T-shirt',hsCode:'6109.10',madeIn:'CA',unitPrice:20,totalPrice:20};
  const intl={...booking,shipmentType:'international',customsInvoice:{currency:'CAD',products:[product]}};
- assert.equal((await invoke(controller.bookShipment,{body:intl})).status,400);
- assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Sale',products:[{...product,hsCode:''}]}}})).status,400);
- assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Sale',taxType:'HST',products:[product]}}})).status,400);
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Bribe',products:[product]}}})).status,400);
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{products:[{...product,hsCode:''}]}}})).status,400);
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{taxType:'HST',products:[product]}}})).status,400);
  let saved;stub(carrier,'getRates',async()=>[raw]);stub(Shipment,'create',async data=>{saved=data;return new Shipment(data)});
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{currency:'CAD',products:[product]}}})).status,201);assert.equal(saved.customsInvoice.reasonForExport,'Sale');
  assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Gift',products:[product]}}})).status,201);assert.equal(saved.customsInvoice.reasonForExport,'Gift');
- const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/reasonForExport,/);assert.doesNotMatch(client,/section232/);
+ // netParcel's Rate & Ship form has no reason-for-export field, so the booking page doesn't ask for one either
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.doesNotMatch(client,/reasonForExport/);assert.doesNotMatch(client,/section232/);
+ assert.doesNotMatch(fs.readFileSync('../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx','utf8'),/Reason for Export/i);
 });
 test('package inputs accept two decimals and volumetric weight uses one factor in both unit systems',()=>{
  for(const file of ['../frontend/src/app/quote/_components/PackageDetailsSection.tsx','../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx']){
