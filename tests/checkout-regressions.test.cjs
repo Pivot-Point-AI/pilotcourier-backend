@@ -67,6 +67,51 @@ test('client/webhook concurrent completion claims exactly one carrier booking',a
 test('cancelled pending shipment cannot be settled',async()=>{const s=document();s.status='cancelled';stub(Shipment,'findOneAndUpdate',async()=>null);stub(Shipment,'findById',async()=>s);stub(carrier,'createShipment',()=>assert.fail('carrier'));await assert.rejects(payment.settlePayment(s,'stripe','pi_test'),/state has changed/)});
 test('PayPal mismatched order rejected before capture or token request',async()=>{stub(Shipment,'findById',async()=>document());stub(axios,'post',()=>assert.fail('network'));assert.equal((await invoke(payments.capturePayPalOrder,{body:{shipmentId:id,orderId:'OTHER'}})).status,400)});
 test('malformed and unowned label IDs never expose labels',async()=>{stub(Shipment,'findById',()=>assert.fail('invalid ID reached database'));assert.equal((await invoke(controller.downloadLabel,{params:{id:'not-an-id'}})).status,400);assert.equal((await invoke(controller.downloadLabel,{user:null})).status,401)});
+test('cancel is owner-only: anonymous, other users and ownerless guest shipments never reach carrier or database write',async()=>{
+ const guest=document();guest.userId=undefined;guest.guestEmail='guest@example.com';stub(guest,'save',()=>assert.fail('saved'));stub(carrier,'cancelShipment',()=>assert.fail('carrier'));stub(Shipment,'findById',async()=>guest);
+ assert.equal((await invoke(controller.cancelShipment,{user:null})).status,401);assert.equal((await invoke(controller.cancelShipment)).status,403);
+ const owned=document();stub(owned,'save',()=>assert.fail('saved'));stub(Shipment,'findById',async()=>owned);assert.equal((await invoke(controller.cancelShipment,{user:{userId:'other'}})).status,403);
+ assert.equal((await invoke(controller.cancelShipment,{params:{id:'not-an-id'}})).status,400);assert.equal(guest.status,'pending_payment');assert.equal(owned.status,'pending_payment');
+});
+test('owner can still cancel their own shipment',async()=>{const s=document();s.createdAt=new Date();let saved=false;stub(s,'save',async()=>{saved=true;return s});stub(Shipment,'findById',async()=>s);const r=await invoke(controller.cancelShipment,{body:{reason:'test'}});assert.equal(r.status,200);assert.equal(s.status,'cancelled');assert.ok(saved)});
+test('cancel keeps the shipment when the carrier does not confirm CANCELLED',async()=>{
+ const s=document();s.status='label_generated';s.netparcelOrderId=42;s.createdAt=new Date();stub(s,'save',()=>assert.fail('saved'));stub(Shipment,'findById',async()=>s);
+ stub(carrier,'cancelShipment',async()=>({shipment:{status:'READY TO PROCESS',order_id:42},errorMessage:'Shipment already picked up.'}));
+ let r=await invoke(controller.cancelShipment);assert.equal(r.status,502);assert.deepEqual(r.data.carrierErrors,['Shipment already picked up.']);assert.equal(s.status,'label_generated');
+ stub(carrier,'cancelShipment',async()=>{throw Error('timeout')});r=await invoke(controller.cancelShipment);assert.equal(r.status,502);assert.equal(s.status,'label_generated');
+});
+test('pickup-scheduled shipment is cancellable once the carrier confirms, with the $25 dispatch deduction',async()=>{
+ const s=document();s.status='pickup_scheduled';s.netparcelOrderId=42;s.createdAt=new Date();stub(s,'save',async()=>s);stub(Shipment,'findById',async()=>s);
+ stub(carrier,'cancelShipment',async()=>({shipment:{status:'CANCELLED',order_id:42}}));
+ const r=await invoke(controller.cancelShipment);assert.equal(r.status,200);assert.equal(s.status,'cancelled');assert.equal(r.data.refundAmount,575);
+ assert.match(fs.readFileSync('../frontend/src/app/account/shipments/page.tsx','utf8'),/cancellable = [^\n]*'pickup_scheduled'/);
+});
+test('international customs invoice uses the documented netParcel field names',async()=>{
+ let sent;stub(carrier,'createShipment',async p=>{sent=p;return{order_id:1,documents:[]}});
+ const s=document();s.shipmentType='international';
+ s.customsInvoice={reasonForExport:'Sale',taxType:'VAT',taxId:'GB123456789',currency:'USD',totalValue:40,products:[{quantity:2,description:'Cotton T-shirt',hsCode:'6109.10',madeIn:'CA',cusma:true,section232:true,unitPrice:20,totalPrice:40}]};
+ await controller.generateLabelForShipment(s);
+ assert.deepEqual(sent.ship.customs_invoice,{reason_for_export:'Sale',invoice_currency:'USD',tax_type:'VAT',tax_id:'GB123456789',items:[{description:'Cotton T-shirt',harmonized_code:'6109.10',origin_country_code:'CA',quantity:2,unit_price:20,cusma:true}]});
+ s.customsInvoice.taxType='HST';await controller.generateLabelForShipment(s);assert.equal(sent.ship.customs_invoice.tax_type,undefined);assert.equal(sent.ship.customs_invoice.tax_id,undefined);
+});
+test('international booking requires reason for export and HS codes before re-rating',async()=>{
+ stub(carrier,'getRates',()=>assert.fail('carrier'));stub(Shipment,'create',()=>assert.fail('database'));
+ const product={quantity:1,description:'Cotton T-shirt',hsCode:'6109.10',madeIn:'CA',unitPrice:20,totalPrice:20};
+ const intl={...booking,shipmentType:'international',customsInvoice:{currency:'CAD',products:[product]}};
+ assert.equal((await invoke(controller.bookShipment,{body:intl})).status,400);
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Sale',products:[{...product,hsCode:''}]}}})).status,400);
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Sale',taxType:'HST',products:[product]}}})).status,400);
+ let saved;stub(carrier,'getRates',async()=>[raw]);stub(Shipment,'create',async data=>{saved=data;return new Shipment(data)});
+ assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Gift',products:[product]}}})).status,201);assert.equal(saved.customsInvoice.reasonForExport,'Gift');
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/reasonForExport,/);assert.doesNotMatch(client,/section232/);
+});
+test('package inputs accept two decimals and volumetric weight uses one factor in both unit systems',()=>{
+ for(const file of ['../frontend/src/app/quote/_components/PackageDetailsSection.tsx','../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx']){
+  const s=fs.readFileSync(file,'utf8');assert.doesNotMatch(s,/min="1" step="0\.1"/,file);assert.doesNotMatch(s,/5000 : 166/,file);assert.match(s,/volumetricWeight\(/,file);
+ }
+ assert.match(fs.readFileSync('../frontend/src/lib/dim-weight.ts','utf8'),/cm: 5000, in: 139/);
+ assert.ok(Math.abs(5000/16.387064/2.20462262-139)/139<0.005,'5000 cm3/kg and 139 in3/lb must describe the same density');
+});
 test('database casting errors have safe response',()=>{let response;errorHandler(Object.assign(new Error('Cast to ObjectId failed secret'),{name:'CastError'}),{method:'GET',path:'/'},{status(n){assert.equal(n,400);return this},json(v){response=v}},()=>{});assert.deepEqual(response,{success:false,message:'Invalid identifier.'})});
 test('invoice endpoint returns actual PDF without fetching a label',async()=>{const s=document();s.payment.status='completed';s.createdAt=new Date('2026-09-28');stub(Shipment,'findById',async()=>s);stub(carrier,'getOrder',()=>assert.fail('label fetch'));const r=await invoke(downloadInvoice);assert.equal(r.status,200);assert.match(r.data.invoice,/^data:application\/pdf;base64,/);const pdf=Buffer.from(r.data.invoice.split(',')[1],'base64');assert.equal(pdf.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.includes(Buffer.from('Invoice NPI')));assert.equal(r.data.label,undefined)});
 test('invoice requires owner and completed payment',async()=>{stub(Shipment,'findById',async()=>document());assert.equal((await invoke(downloadInvoice)).status,409);assert.equal((await invoke(downloadInvoice,{user:{userId:'other'}})).status,403)});
@@ -91,10 +136,10 @@ test('verified webhook shares completion path and rejects mismatched amounts',as
  eventIntent={...intent(),amount_received:1};assert.equal((await invoke(payments.stripeWebhook)).status,500);assert.equal(claims,0);eventIntent=intent();assert.equal((await invoke(payments.stripeWebhook)).status,200);assert.equal(claims,1);
 });
 test('PayPal pre-capture verification refuses wrong amount before charging',async()=>{const s=document();stub(Shipment,'findById',async()=>s);let captures=0;stub(axios,'post',async url=>{if(url.endsWith('/token'))return{data:{access_token:'test'}};captures++;throw Error('unexpected capture')});const order=paypal();order.status='APPROVED';order.purchase_units[0].amount.value='0.01';stub(axios,'get',async()=>({data:order}));assert.equal((await invoke(payments.capturePayPalOrder,{body:{shipmentId:id,orderId:'PPTEST'}})).status,400);assert.equal(captures,0)});
-test('province HTTP route covers 70 countries and payment routes require authentication',async()=>{
+test('province HTTP route covers 70 countries and payment and cancel routes require authentication',async()=>{
  const express=require('express'),router=require('../dist/routes').default;const app=express();app.use(express.json());app.use('/api',router);app.use(errorHandler);const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});
  try{const base=`http://127.0.0.1:${server.address().port}/api`;for(const code of new Set(require('./fixtures/postal-70-country.json').fixtures.map(f=>f.country))){const r=await fetch(`${base}/geo/provinces?country=${code}`);assert.equal(r.status,200);const options=await r.json();assert.ok(options.length,code);assert.ok(options.every(o=>o.label&&o.value))}
- for(const path of ['/shipments/book',`/shipments/${id}/confirm-payment`,'/payments/stripe/intent','/payments/paypal/order','/payments/paypal/capture']){const r=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(r.status,401,path)}
+ for(const path of ['/shipments/book',`/shipments/${id}/confirm-payment`,`/shipments/${id}/cancel`,'/payments/stripe/intent','/payments/paypal/order','/payments/paypal/capture']){const r=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(r.status,401,path)}
  }finally{await new Promise(resolve=>server.close(resolve))}
 });
 for(const packagingType of ['My Packaging','Envelope','Pak','Pallet'])test(`quote and booking retain ${packagingType} with metric units`,async()=>{

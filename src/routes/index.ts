@@ -52,7 +52,7 @@ router.post('/shipments/rates', optionalAuth, getRates);
 router.post('/shipments/book', authenticate, bookShipment);
 router.post('/shipments/:id/confirm-payment', authenticate, confirmPayment);
 router.get('/shipments/track/:trackingNumber', trackShipment);
-router.post('/shipments/:id/cancel', optionalAuth, cancelShipment);
+router.post('/shipments/:id/cancel', authenticate, cancelShipment);
 router.get('/shipments/my', authenticate, getMyShipments);
 router.get('/shipments/:id/invoice', authenticate, downloadInvoice);
 router.get('/shipments/:id/label', authenticate, downloadLabel);

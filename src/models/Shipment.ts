@@ -84,7 +84,9 @@ export interface ICustomsProduct {
 }
 
 export interface ICustomsInvoice {
+  reasonForExport?: string;
   taxType?: string;
+  taxId?: string;
   currency?: string;
   totalValue?: number;
   products: ICustomsProduct[];
@@ -119,6 +121,7 @@ export interface IShipment extends Document {
   pickupDetails?: IPickupDetails;
   specialServices?: ISpecialServices;
   references?: IReference[];
+  notifyRecipient?: boolean;
   customsInvoice?: ICustomsInvoice;
   status: ShipmentStatus;
   trackingNumber?: string;
@@ -237,7 +240,9 @@ const CustomsProductSchema = new Schema<ICustomsProduct>({
 }, { _id: false });
 
 const CustomsInvoiceSchema = new Schema<ICustomsInvoice>({
+  reasonForExport: { type: String },
   taxType: { type: String },
+  taxId: { type: String },
   currency: { type: String, default: 'CAD' },
   totalValue: { type: Number },
   products: [CustomsProductSchema],
@@ -259,6 +264,7 @@ const ShipmentSchema = new Schema<IShipment>(
     pickupDetails: { type: PickupDetailsSchema },
     specialServices: { type: SpecialServicesSchema },
     references: [ReferenceSchema],
+    notifyRecipient: { type: Boolean, default: true },
     customsInvoice: { type: CustomsInvoiceSchema },
     status: {
       type: String,

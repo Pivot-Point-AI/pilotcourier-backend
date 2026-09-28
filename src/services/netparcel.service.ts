@@ -63,6 +63,26 @@ interface NpRate {
   mode?: string;
 }
 
+// customs_invoice per netParcel JSON API Developer Guide v2.2 (items / harmonized_code / origin_country_code).
+// Tax type codes follow netParcel's own Rate & Ship form.
+export const CUSTOMS_EXPORT_REASONS = ['Sale', 'Sample', 'Repair', 'Gift', 'Return', 'Other'];
+export const CUSTOMS_TAX_TYPES = ['EIN', 'GBVAT', 'IOSS', 'SSN', 'VAT', 'VOEC'];
+
+interface NpCustomsInvoice {
+  reason_for_export?: string;
+  invoice_currency: string;
+  tax_type?: string;
+  tax_id?: string;
+  items: Array<{
+    description: string;
+    harmonized_code?: string;
+    origin_country_code: string;
+    quantity: number;
+    unit_price: number;
+    cusma: boolean;
+  }>;
+}
+
 interface NpShipRequest {
   ship: {
     shipper_type?: 'consumer' | 'business';
@@ -75,7 +95,7 @@ interface NpShipRequest {
     references?: Array<{ reference_name: string; reference_value: string }>;
     generate_label?: boolean;
     special_services?: Record<string, any>;
-    customs_invoice?: any;
+    customs_invoice?: NpCustomsInvoice;
     pick_up?: any;
   };
 }
@@ -275,6 +295,37 @@ class NetParcelService {
         description: p.description || 'Package',
         special_handling: !!p.specialHandling,
         ...(packagingType === 'Pallet' && p.freightClass ? { freight_class: String(p.freightClass) } : {}),
+      })),
+    };
+  }
+
+  buildCustomsInvoice(invoice: {
+    reasonForExport?: string;
+    currency?: string;
+    taxType?: string;
+    taxId?: string;
+    products: Array<{
+      quantity: number;
+      description: string;
+      hsCode?: string;
+      madeIn: string;
+      cusma?: boolean;
+      unitPrice: number;
+    }>;
+  }): NpCustomsInvoice {
+    const taxType = invoice.taxType && CUSTOMS_TAX_TYPES.includes(invoice.taxType) ? invoice.taxType : undefined;
+    return {
+      ...(invoice.reasonForExport ? { reason_for_export: invoice.reasonForExport } : {}),
+      invoice_currency: invoice.currency || 'CAD',
+      ...(taxType ? { tax_type: taxType } : {}),
+      ...(taxType && invoice.taxId ? { tax_id: invoice.taxId } : {}),
+      items: (invoice.products || []).map((p) => ({
+        description: p.description,
+        ...(p.hsCode ? { harmonized_code: p.hsCode } : {}),
+        origin_country_code: p.madeIn,
+        quantity: p.quantity,
+        unit_price: p.unitPrice,
+        cusma: !!p.cusma,
       })),
     };
   }

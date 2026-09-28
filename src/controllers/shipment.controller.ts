@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import Shipment, { IShipment } from '../models/Shipment';
 import SavedQuote from '../models/SavedQuote';
-import netparcelService from '../services/netparcel.service';
+import netparcelService, { CUSTOMS_EXPORT_REASONS, CUSTOMS_TAX_TYPES } from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
@@ -47,7 +47,7 @@ export const generateLabelForShipment = async (shipment: IShipment): Promise<boo
           ...netparcelService.buildAddress(shipment.recipient),
           address_type: shipment.recipient.isResidential ? 'residential' : null,
           email: shipment.recipient.email,
-          send_email_confirmation: !!shipment.recipient.email,
+          send_email_confirmation: !!shipment.recipient.email && shipment.notifyRecipient !== false,
         },
         service: {
           service_code: parseInt(shipment.selectedRate.serviceCode, 10) || shipment.selectedRate.serviceCode,
@@ -68,21 +68,9 @@ export const generateLabelForShipment = async (shipment: IShipment): Promise<boo
         packaging_information: netparcelService.buildPackagingInformation(shipment.parcels, shipment.packagingType),
         references: refs.slice(0, 3),
         generate_label: true,
-        customs_invoice: shipment.shipmentType === 'international' && shipment.customsInvoice ? {
-          tax_type: shipment.customsInvoice.taxType,
-          currency: shipment.customsInvoice.currency || 'CAD',
-          total_value: shipment.customsInvoice.totalValue,
-          products: (shipment.customsInvoice.products || []).map((p) => ({
-            quantity: p.quantity,
-            description: p.description,
-            hs_code: p.hsCode,
-            made_in: p.madeIn,
-            cusma: !!p.cusma,
-            section_232: !!p.section232,
-            unit_price: p.unitPrice,
-            total_price: p.totalPrice,
-          })),
-        } : undefined,
+        customs_invoice: shipment.shipmentType === 'international' && shipment.customsInvoice
+          ? netparcelService.buildCustomsInvoice(shipment.customsInvoice)
+          : undefined,
       },
     };
 
@@ -457,7 +445,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       shipper, recipient, parcels, selectedRate,
       shipmentType, guestEmail, guestPhone,
       pickupDetails, specialServices, references,
-      packagingType, customsInvoice,
+      packagingType, customsInvoice, notifyRecipient,
     } = req.body;
     const userId = (req as any).user?.userId;
 
@@ -468,6 +456,18 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
     if (!userId) throw requestError(401, 'Authentication required.');
     if (!shipper || !recipient || !Array.isArray(parcels) || !parcels.length || !selectedRate) {
       throw requestError(400, 'Addresses, packages and a selected service are required.');
+    }
+    if (shipmentType === 'international' && customsInvoice) {
+      if (!CUSTOMS_EXPORT_REASONS.includes(customsInvoice.reasonForExport)) {
+        throw requestError(400, 'Select a reason for export for the customs invoice.');
+      }
+      if (customsInvoice.taxType && customsInvoice.taxType !== 'None' && !CUSTOMS_TAX_TYPES.includes(customsInvoice.taxType)) {
+        throw requestError(400, 'Unsupported tax ID type for the customs invoice.');
+      }
+      if (!Array.isArray(customsInvoice.products) || !customsInvoice.products.length ||
+          customsInvoice.products.some((p: any) => !p?.description || !p?.hsCode || !p?.madeIn)) {
+        throw requestError(400, 'Each customs product needs a description, HS code and country of origin.');
+      }
     }
     const quoteBody: Record<string, any> = {
       packages: parcels, packagingType, specialServices,
@@ -515,6 +515,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       specialServices,
       references,
       customsInvoice,
+      notifyRecipient: notifyRecipient !== false,
       status: 'pending_payment',
       payment: {
         amount: authoritativeRate.totalCharge,
@@ -665,27 +666,31 @@ export const downloadLabel = async (req: Request, res: Response, next: NextFunct
 // ── POST /api/shipments/:id/cancel ───────────────────────────────────────────
 export const cancelShipment = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
     const { reason } = req.body;
-    const userId = (req as any).user?.userId;
 
-    const shipment = await Shipment.findById(id);
-    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    // Owner-only: ownerless (legacy guest) shipments are refused, as for labels and invoices
+    const shipment = await ownedShipment(req, req.params.id);
 
-    if (shipment.userId && shipment.userId.toString() !== userId) {
-      return res.status(403).json({ success: false, message: 'Unauthorized.' });
-    }
-
-    const cancellableStatuses = ['pending_payment', 'paid', 'label_generated'];
+    const cancellableStatuses = ['pending_payment', 'paid', 'label_generated', 'pickup_scheduled'];
     if (!cancellableStatuses.includes(shipment.status)) {
       return res.status(400).json({ success: false, message: `Cannot cancel a shipment with status: ${shipment.status}.` });
     }
 
+    // The carrier must confirm CANCELLED; netParcel can answer 200 with errors and the unchanged status.
     if (shipment.netparcelOrderId) {
+      let carrierStatus = '';
+      let carrierErrors: string[] = [];
       try {
-        await netparcelService.cancelShipment(shipment.netparcelOrderId);
+        const result: any = await netparcelService.cancelShipment(shipment.netparcelOrderId);
+        carrierStatus = String(result?.shipment?.status || '').toUpperCase();
+        carrierErrors = [result?.errorMessage, ...(result?.errorMessages || [])].filter((m) => typeof m === 'string' && m.trim());
       } catch (err) {
-        logger.warn('netParcel carrier cancellation failed (continuing with internal cancel):', err);
+        logger.warn(`netParcel carrier cancellation failed for shipment ${shipment._id}:`, err);
+      }
+      if (carrierStatus !== 'CANCELLED') {
+        return res.status(502).json({ success: false,
+          message: 'The carrier could not cancel this shipment, so it has not been cancelled. Please try again or contact support.',
+          ...(carrierErrors.length ? { carrierErrors: carrierErrors.slice(0, 5) } : {}) });
       }
     }
 
@@ -728,13 +733,22 @@ export const cancelShipment = async (req: Request, res: Response, next: NextFunc
 };
 
 // ── GET /api/shipments/my ────────────────────────────────────────────────────
+// Sorted server-side so ordering holds across pages.
+const HISTORY_SORTS: Record<string, Record<string, 1 | -1>> = {
+  createdAt_desc: { createdAt: -1 },
+  createdAt_asc: { createdAt: 1 },
+  amount_desc: { 'payment.amount': -1, createdAt: -1 },
+  amount_asc: { 'payment.amount': 1, createdAt: -1 },
+};
+
 export const getMyShipments = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = new mongoose.Types.ObjectId((req as any).user.userId);
-    const { page = 1, limit = 10, status, search, dateFrom, dateTo } = req.query;
+    const { page = 1, limit = 10, status, excludeStatus, sortBy, search, dateFrom, dateTo } = req.query;
 
     const query: any = { userId };
-    if (status && status !== 'all') query.status = status;
+    if (typeof status === 'string' && status && status !== 'all') query.status = status;
+    else if (typeof excludeStatus === 'string' && excludeStatus) query.status = { $ne: excludeStatus };
     if (search) {
       query.$or = [
         { shipmentNumber: { $regex: search, $options: 'i' } },
@@ -750,7 +764,7 @@ export const getMyShipments = async (req: Request, res: Response, next: NextFunc
     }
 
     const shipments = await Shipment.find(query)
-      .sort({ createdAt: -1 })
+      .sort(HISTORY_SORTS[String(sortBy)] || HISTORY_SORTS.createdAt_desc)
       .skip((+page - 1) * +limit)
       .limit(+limit)
       .lean();
