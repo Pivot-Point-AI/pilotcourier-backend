@@ -204,6 +204,32 @@ test('envelope is rated and shipped as one envelope at the netParcel limit, not 
  await invoke(controller.getRates,{body:{...quote,packagingType:'My Packaging',packages:[{...parcel,weight:5}]}});assert.equal(payload.rate.packaging_information.packages[0].weight,5);
  const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/ENVELOPE_MAX_WEIGHT\[dimUnit\]/);assert.match(client,/pickupMethod,\r?\n\s+pickupDate,/);assert.match(client,/const pkgList = quotedPackages\(\)/);
 });
+test('P.O. Box addresses are refused before netParcel is called, at pickup and delivery',async()=>{
+ stub(carrier,'getRates',()=>assert.fail('carrier'));
+ for(const [side,street] of [['destination','PO Box 1200'],['destination','P.O. Box 55'],['origin','Post Office Box 9'],['destination','Case postale 12'],['destination','C.P. 45'],['destination','General Delivery'],['origin','Box 77']]){
+  const r=await invoke(controller.getRates,{body:{...quote,[side+'Street']:street}});assert.equal(r.status,400,street);assert.match(r.data.message,/P\.O\. Box/,street);
+ }
+ stub(carrier,'getRates',async()=>[raw]);
+ for(const street of ['10 Boxwood Dr','290 Bremner Blvd','1 Post Rd','5100 Spectrum Way'])assert.equal((await invoke(controller.getRates,{body:{...quote,destinationStreet:street}})).status,200,street);
+});
+test('Canadian postal code must belong to the chosen province',async()=>{
+ stub(carrier,'getRates',()=>assert.fail('carrier'));
+ const r=await invoke(controller.getRates,{body:{...quote,destinationProvince:'ON'}});assert.equal(r.status,400);assert.match(r.data.message,/V6B1A1 belongs to BC, not ON/);
+ stub(carrier,'getRates',async()=>[raw]);
+ for(const prov of ['BC','British Columbia','',undefined])assert.equal((await invoke(controller.getRates,{body:{...quote,destinationProvince:prov}})).status,200,String(prov));
+ assert.equal((await invoke(controller.getRates,{body:{...quote,destinationPostal:'X0A0H0',destinationCity:'Iqaluit',destinationProvince:'NU'}})).status,200);
+});
+test('Hold for Pickup without a signature drops Purolator with a notice; with a signature Purolator stays',async()=>{
+ const puro={...raw,service_code:'2001',service_name:'Purolator Express Pack'},cp={...raw,service_code:'140001',service_name:'Canada Post Expedited Parcel'};
+ stub(carrier,'getRates',async()=>[puro,cp]);
+ let r=await invoke(controller.getRates,{body:{...quote,specialServices:{holdForPickup:true}}});
+ assert.equal(r.status,200);assert.deepEqual(r.data.rates.map(x=>x.serviceName),['Canada Post Expedited Parcel']);assert.match(r.data.notice,/Purolator is not available with Hold for Pickup/);
+ for(const s of [{holdForPickup:true,signatureRequired:true},{holdForPickup:true,adultSignature:true},{}]){r=await invoke(controller.getRates,{body:{...quote,specialServices:s}});assert.equal(r.data.rates.length,2,JSON.stringify(s));assert.equal(r.data.notice,undefined)}
+ stub(Shipment,'create',()=>assert.fail('database'));
+ r=await invoke(controller.bookShipment,{body:{...booking,specialServices:{holdForPickup:true},selectedRate:{...rate,serviceCode:'2001',carrierId:'2001',serviceName:'Purolator Express Pack'}}});assert.equal(r.status,409);
+ stub(carrier,'getRates',async()=>[puro]);r=await invoke(controller.getRates,{body:{...quote,specialServices:{holdForPickup:true}}});assert.equal(r.status,422);assert.match(r.data.message,/require a signature or turn off Hold for Pickup/);
+ assert.match(fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8'),/if \(data\.notice\) toast\(data\.notice/);
+});
 test('database casting errors have safe response',()=>{let response;errorHandler(Object.assign(new Error('Cast to ObjectId failed secret'),{name:'CastError'}),{method:'GET',path:'/'},{status(n){assert.equal(n,400);return this},json(v){response=v}},()=>{});assert.deepEqual(response,{success:false,message:'Invalid identifier.'})});
 test('invoice endpoint returns actual PDF without fetching a label',async()=>{const s=document();s.payment.status='completed';s.createdAt=new Date('2026-09-28');stub(Shipment,'findById',async()=>s);stub(carrier,'getOrder',()=>assert.fail('label fetch'));const r=await invoke(downloadInvoice);assert.equal(r.status,200);assert.match(r.data.invoice,/^data:application\/pdf;base64,/);const pdf=Buffer.from(r.data.invoice.split(',')[1],'base64');assert.equal(pdf.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.includes(Buffer.from('Invoice NPI')));assert.equal(r.data.label,undefined)});
 test('invoice requires owner and completed payment',async()=>{stub(Shipment,'findById',async()=>document());assert.equal((await invoke(downloadInvoice)).status,409);assert.equal((await invoke(downloadInvoice,{user:{userId:'other'}})).status,403)});
