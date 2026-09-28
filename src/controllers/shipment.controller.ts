@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import Shipment, { IShipment } from '../models/Shipment';
 import SavedQuote from '../models/SavedQuote';
-import netparcelService, { CUSTOMS_EXPORT_REASONS, CUSTOMS_TAX_TYPES } from '../services/netparcel.service';
+import netparcelService, { CUSTOMS_EXPORT_REASONS, CUSTOMS_TAX_TYPES, envelopePackage } from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
@@ -153,6 +153,14 @@ const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDat
   return Math.max(diff, 1);
 };
 
+// A future pickup is priced differently (e.g. UPS pickup charge), so the pickup date is sent as the ship date,
+// as netParcel's Rate & Ship form does. Malformed or past dates are left out and netParcel prices for today.
+const todayInToronto = (): string => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
+export const rateShipDate = (date: unknown): string | undefined =>
+  typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)) && date >= todayInToronto()
+    ? date
+    : undefined;
+
 // ── POST /api/shipments/rates ────────────────────────────────────────────────
 export const getRates = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -198,12 +206,18 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     const resolvedPackaging = VALID_PACKAGING.includes(packagingType) ? packagingType : 'My Packaging';
     if (!VALID_PACKAGING.includes(packagingType)) return res.status(400).json({ success: false, message: 'Unsupported packaging type.' });
 
+    const uom: 'I' | 'M' = (weightUnit === 'lbs' || dimensionUnit === 'in') ? 'I' : 'M';
+
     // Multi-package shipments: use the full packages[] array when provided (each package
     // rated individually by netParcel), falling back to the single flat weight/length/width/height
     // fields for callers that don't send packages[] (e.g. resumed saved quotes).
-    const packageRows: any[] = Array.isArray(packages) && packages.length > 0
+    const requestedRows: any[] = Array.isArray(packages) && packages.length > 0
       ? packages
       : [{ length, width, height, weight, insuranceAmount, description, specialHandling, freightClass }];
+    // An envelope is one document envelope at netParcel's envelope limit, whatever the hidden package row holds
+    const packageRows: any[] = resolvedPackaging === 'Envelope'
+      ? [envelopePackage({ ...requestedRows[0], description: requestedRows[0]?.description || 'Documents' }, uom)]
+      : requestedRows;
 
     for (const [index, p] of packageRows.entries()) {
       if (!p || !Number.isFinite(Number(p.weight)) || Number(p.weight) <= 0) {
@@ -222,7 +236,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       return res.status(400).json({ success: false, message: 'Freight class is required for Pallet (LTL) shipments.' });
     }
 
-    const uom: 'I' | 'M' = (weightUnit === 'lbs' || dimensionUnit === 'in') ? 'I' : 'M';
+    const shipDate = rateShipDate(req.body.pickupDate);
 
     // Clean inputs
     const cleanPostal = (p: string, country?: string) => {
@@ -286,6 +300,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       rate: {
         shipper_type: shipperType,
         consignee_type: consigneeType,
+        ...(shipDate ? { ship_date: shipDate } : {}),
         origin: {
           country: originCountry,
           postal_code: cleanPostal(originPostal, originCountry) ?? '',
@@ -472,7 +487,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
     const quoteBody: Record<string, any> = {
       packages: parcels, packagingType, specialServices,
       weightUnit: parcels[0].weightUnit, dimensionUnit: parcels[0].dimensionUnit,
-      pickupMethod: pickupDetails?.method || 'drop_off',
+      pickupMethod: pickupDetails?.method || 'drop_off', pickupDate: pickupDetails?.pickupDate,
       pickupLocation: pickupDetails?.location, pickupInstructions: pickupDetails?.instructions,
       readyHour: pickupDetails?.readyHour, readyMin: pickupDetails?.readyMin,
       closeHour: pickupDetails?.closeHour, closeMin: pickupDetails?.closeMin,

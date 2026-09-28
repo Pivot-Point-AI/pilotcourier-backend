@@ -42,6 +42,9 @@ interface NpRateRequest {
   rate: {
     shipper_type?: 'consumer' | 'business';
     consignee_type?: 'consumer' | 'business';
+    // Not in the v2.2 guide's rate section, but netParcel honours it: a future pickup date changes
+    // the price (e.g. UPS pickup charge), exactly as the Rate & Ship form's Pick Up Date does.
+    ship_date?: string;
     origin: NpAddress;
     destination: NpAddress;
     items?: any[];
@@ -62,6 +65,15 @@ interface NpRate {
   tariff_price?: string;
   mode?: string;
 }
+
+// netParcel rates an Envelope as an envelope only within its limit (0.45 kg / 1 lb); heavier, it is priced as a
+// parcel and the envelope-only services disappear. Envelopes carry documents, so they are always sent at the limit.
+export const ENVELOPE_MAX_WEIGHT = { M: 0.45, I: 1 } as const;
+export const envelopePackage = <T extends object>(base: T, uom: 'I' | 'M') => {
+  // Saved parcels are Mongoose subdocuments; spreading one directly drops its fields
+  const plain: T = typeof (base as any)?.toObject === 'function' ? (base as any).toObject() : base;
+  return { ...plain, length: 1, width: 1, height: 1, weight: ENVELOPE_MAX_WEIGHT[uom] };
+};
 
 // customs_invoice per netParcel JSON API Developer Guide v2.2 (items / harmonized_code / origin_country_code).
 // Tax type codes follow netParcel's own Rate & Ship form.
@@ -282,11 +294,13 @@ class NetParcelService {
     // Determine uom from first parcel's units
     const firstParcel = parcels[0];
     const uom = firstParcel?.weightUnit === 'lbs' ? 'I' : 'M';
+    // Ship the envelope exactly as it was quoted (see ENVELOPE_MAX_WEIGHT)
+    const rows = packagingType === 'Envelope' && firstParcel ? [envelopePackage(firstParcel, uom)] : parcels;
 
     return {
       packaging_type: packagingType,
       uom,
-      packages: parcels.map((p) => ({
+      packages: rows.map((p) => ({
         length: p.length,
         width: p.width,
         height: p.height,

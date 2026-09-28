@@ -182,6 +182,28 @@ test('contact and newsletter forms submit to the API instead of faking success',
  const c=fs.readFileSync('../frontend/src/app/contact/ContactClient.tsx','utf8'),f=fs.readFileSync('../frontend/src/components/layout/Footer.tsx','utf8');
  assert.doesNotMatch(c,/setTimeout/);assert.match(c,/formsApi\.contact\(/);assert.doesNotMatch(f,/onSubmit=\{e => e\.preventDefault\(\)\}/);assert.match(f,/formsApi\.subscribe\(/);
 });
+test('pickup date is sent to netParcel as ship_date; past or malformed dates are left out',async()=>{
+ let payload;stub(carrier,'getRates',async p=>{payload=p;return[raw]});
+ const future=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
+ assert.equal((await invoke(controller.getRates,{body:{...quote,pickupMethod:'schedule_pickup',pickupDate:future}})).status,200);assert.equal(payload.rate.ship_date,future);
+ for(const bad of ['2020-01-01','01/10/2026','2026-13-45','not-a-date',undefined]){assert.equal((await invoke(controller.getRates,{body:{...quote,pickupDate:bad}})).status,200);assert.equal('ship_date' in payload.rate,false,String(bad))}
+});
+test('booking re-rates with the same pickup date as the quote',async()=>{
+ const future=new Date(Date.now()+3*86400000).toISOString().slice(0,10);let payload;
+ stub(carrier,'getRates',async p=>{payload=p;return[raw]});stub(Shipment,'create',async d=>new Shipment(d));
+ const r=await invoke(controller.bookShipment,{body:{...booking,pickupDetails:{method:'schedule_pickup',pickupDate:future,location:'Reception',readyHour:'10',readyMin:'00',closeHour:'14',closeMin:'00'}}});
+ assert.equal(r.status,201);assert.equal(payload.rate.ship_date,future);
+});
+test('envelope is rated and shipped as one envelope at the netParcel limit, not the hidden package row',async()=>{
+ let payload;stub(carrier,'getRates',async p=>{payload=p;return[raw]});
+ await invoke(controller.getRates,{body:{...quote,packagingType:'Envelope',weightUnit:'kg',dimensionUnit:'cm',packages:[{...parcel,length:1,width:1,height:1,weight:1},{...parcel,weight:3}]}});
+ assert.deepEqual(payload.rate.packaging_information.packages.map(p=>[p.length,p.width,p.height,p.weight]),[[1,1,1,0.45]]);assert.equal(payload.rate.items[0].weight,0.45);
+ await invoke(controller.getRates,{body:{...quote,packagingType:'Envelope',packages:[{...parcel,weight:5}]}});
+ assert.deepEqual(payload.rate.packaging_information.packages.map(p=>p.weight),[1]);
+ assert.deepEqual(carrier.buildPackagingInformation([{...parcel,weightUnit:'kg',dimensionUnit:'cm',weight:1}],'Envelope').packages.map(p=>[p.length,p.width,p.height,p.weight]),[[1,1,1,0.45]]);
+ await invoke(controller.getRates,{body:{...quote,packagingType:'My Packaging',packages:[{...parcel,weight:5}]}});assert.equal(payload.rate.packaging_information.packages[0].weight,5);
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/ENVELOPE_MAX_WEIGHT\[dimUnit\]/);assert.match(client,/pickupMethod,\r?\n\s+pickupDate,/);assert.match(client,/const pkgList = quotedPackages\(\)/);
+});
 test('database casting errors have safe response',()=>{let response;errorHandler(Object.assign(new Error('Cast to ObjectId failed secret'),{name:'CastError'}),{method:'GET',path:'/'},{status(n){assert.equal(n,400);return this},json(v){response=v}},()=>{});assert.deepEqual(response,{success:false,message:'Invalid identifier.'})});
 test('invoice endpoint returns actual PDF without fetching a label',async()=>{const s=document();s.payment.status='completed';s.createdAt=new Date('2026-09-28');stub(Shipment,'findById',async()=>s);stub(carrier,'getOrder',()=>assert.fail('label fetch'));const r=await invoke(downloadInvoice);assert.equal(r.status,200);assert.match(r.data.invoice,/^data:application\/pdf;base64,/);const pdf=Buffer.from(r.data.invoice.split(',')[1],'base64');assert.equal(pdf.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.includes(Buffer.from('Invoice NPI')));assert.equal(r.data.label,undefined)});
 test('invoice requires owner and completed payment',async()=>{stub(Shipment,'findById',async()=>document());assert.equal((await invoke(downloadInvoice)).status,409);assert.equal((await invoke(downloadInvoice,{user:{userId:'other'}})).status,403)});
