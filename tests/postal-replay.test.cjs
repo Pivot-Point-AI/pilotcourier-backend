@@ -30,6 +30,6 @@ test('subdivision fallback preserves level 4 and ignores unknown or foreign leve
     ['PT', { 'ISO3166-2-lvl6': 'PT-' }, ''],
   ]) {
     global.fetch = async () => ({ ok: true, json: async () => [{ address: { city: 'Fixture', ...address } }] });
-    assert.equal((await lookupPostal(country, '12345')).province, expected);
+    assert.equal((await lookupPostal(country, fixtures.find(f => f.country === country).postal)).province, expected);
   }
 });

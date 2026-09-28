@@ -1,4 +1,4 @@
-﻿const assert = require('node:assert/strict');
+const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,6 +10,7 @@ process.env.RATE_MARKUP_PERCENT = '0';
 require('../dist/utils/logger').default.silent = true;
 const service = require('../dist/services/netparcel.service').default;
 const Shipment = require('../dist/models/Shipment').default;
+require('../dist/models/SavedQuote').default.findOneAndUpdate = async () => null;
 const controller = require('../dist/controllers/shipment.controller');
 const { normalizeDeliveryDate } = require('../dist/utils/rate-display');
 const frontendPath = path.resolve(__dirname, '../../frontend/src/lib/rate-display.ts');
@@ -20,7 +21,7 @@ const frontend = { exports: {} };
 vm.runInNewContext(frontendCode, frontend);
 async function invoke(fn, body) {
   let status = 200, data;
-  await fn({ body }, { status(value) { status = value; return this; }, json(value) { data = value; return this; } }, error => { throw error; });
+  await fn({ body, user: { userId: "507f1f77bcf86cd799439011" } }, { status(value) { status = value; return this; }, json(value) { data = value; return this; } }, error => { throw error; });
   return { status, data };
 }
 const parcel = { weight: 5, weightUnit: 'lbs', length: 10, width: 8, height: 6, dimensionUnit: 'in', description: 'Regression fixture', insuranceAmount: 125, specialHandling: true, freightClass: '77.5', quantity: 1 };
@@ -38,7 +39,7 @@ function assertCurrencyBadges(rates) {
 }
 test('quote response groups currencies, computes badges and preserves calendar days', async () => {
   service.getRates = async () => rawRates;
-  const result = await invoke(controller.getRates, { originPostal: 'M5V3A8', destinationPostal: 'V6B1A1', packages: [parcel] });
+  const result = await invoke(controller.getRates, { originPostal: 'M5V3A8', destinationPostal: 'V6B1A1', originCity: 'Toronto', destinationCity: 'Vancouver', packages: [parcel] });
   assert.equal(result.status, 200);
   assertCurrencyBadges(result.data.rates);
   assert.deepEqual(result.data.rates.map(rate => rate.currency), ['CAD', 'CAD', 'USD']);
@@ -52,7 +53,7 @@ test('quote response groups currencies, computes badges and preserves calendar d
 test('booking persists package fields and all three references through final carrier payload', async () => {
   let quotePayload, shipPayload, persisted;
   service.getRates = async payload => { quotePayload = payload; return rawRates; };
-  const quote = await invoke(controller.getRates, { originPostal: 'M5V3A8', destinationPostal: 'V6B1A1', packagingType: 'Pallet', packages: [parcel] });
+  const quote = await invoke(controller.getRates, { originPostal: 'M5V3A8', destinationPostal: 'V6B1A1', originCity: 'Toronto', destinationCity: 'Vancouver', packagingType: 'Pallet', packages: [parcel] });
   const references = [1, 2, 3].map(n => ({ referenceName: `Reference ${n}`, referenceValue: `Value ${n}` }));
   const originalCreate = Shipment.create;
   Shipment.create = async data => { persisted = new Shipment(data); return persisted; };

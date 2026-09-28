@@ -1,3 +1,4 @@
+import { isPostalRequired } from '../utils/postal';
 import mongoose, { Document, Schema } from 'mongoose';
 
 export type ShipmentStatus =
@@ -128,6 +129,9 @@ export interface IShipment extends Document {
     method?: 'stripe' | 'paypal' | 'wise' | 'remitly';
     status: 'pending' | 'completed' | 'failed' | 'refunded';
     transactionId?: string;
+    priceVerified?: boolean;
+    stripeIntentId?: string;
+    paypalOrderId?: string;
     amount: number;
     currency: string;
     paidAt?: Date;
@@ -157,7 +161,7 @@ const AddressSchema = new Schema<IAddress>({
   street2: { type: String },
   city: { type: String, required: true },
   province: { type: String, required: true },
-  postalCode: { type: String, required: true },
+  postalCode: { type: String, required: function (this: IAddress) { return isPostalRequired(this.country); } },
   country: { type: String, required: true },
   phone: { type: String, required: true },
   email: { type: String },
@@ -273,6 +277,9 @@ const ShipmentSchema = new Schema<IShipment>(
       method: { type: String, enum: ['stripe', 'paypal', 'wise', 'remitly'] },
       status: { type: String, enum: ['pending', 'completed', 'failed', 'refunded'], default: 'pending' },
       transactionId: { type: String },
+      priceVerified: { type: Boolean, default: false },
+      stripeIntentId: { type: String },
+      paypalOrderId: { type: String },
       amount: { type: Number },
       currency: { type: String, default: 'CAD' },
       paidAt: { type: Date },

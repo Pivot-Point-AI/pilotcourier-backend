@@ -40,6 +40,8 @@ interface NpPackagingInformation {
 
 interface NpRateRequest {
   rate: {
+    shipper_type?: 'consumer' | 'business';
+    consignee_type?: 'consumer' | 'business';
     origin: NpAddress;
     destination: NpAddress;
     items?: any[];
@@ -63,6 +65,8 @@ interface NpRate {
 
 interface NpShipRequest {
   ship: {
+    shipper_type?: 'consumer' | 'business';
+    consignee_type?: 'consumer' | 'business';
     origin: NpAddress;
     destination: NpAddress & { email?: string; send_email_confirmation?: boolean };
     service: { service_code: number | string; service_name?: string };
@@ -154,10 +158,19 @@ class NetParcelService {
       }
       if (!rates.length) {
         logger.warn('No rates returned from netParcel for given shipment details');
+        const messages: string[] = [...new Set<string>(errors.map((e: any) =>
+          typeof e.errorMessage === 'string' ? e.errorMessage.trim().slice(0, 500) : '').filter(Boolean))].slice(0, 5);
+        if (messages.length) throw Object.assign(new Error(messages.join(' ')), { statusCode: 422, carrierErrors: messages });
       }
 
       return rates;
     } catch (error: any) {
+      if (error.statusCode === 422) throw error;
+      if ([400, 422].includes(error?.response?.status) && Array.isArray(error.response.data?.errors)) {
+        const messages: string[] = [...new Set<string>(error.response.data.errors.map((e: any) =>
+          typeof e.errorMessage === 'string' ? e.errorMessage.trim().slice(0, 500) : '').filter(Boolean))].slice(0, 5);
+        if (messages.length) throw Object.assign(new Error(messages.join(' ')), { statusCode: 422, carrierErrors: messages });
+      }
       logger.error(`netParcel getRates error status: ${error?.response?.status}`);
       logger.error(`netParcel getRates error data: ${JSON.stringify(error?.response?.data || error.message)}`);
       throw new Error(error?.response?.data?.message || 'Failed to fetch shipping rates');

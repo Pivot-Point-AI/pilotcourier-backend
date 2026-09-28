@@ -1,3 +1,5 @@
+import subdivisions from '../data/subdivisions.json';
+import { downloadInvoice } from '../controllers/invoice.controller';
 import { Router } from 'express';
 import { getPostal } from '../controllers/geo.controller';
 import {
@@ -47,18 +49,19 @@ router.delete('/auth/quotes/:quoteId', authenticate, deleteSavedQuote);
 
 // ── Shipments ─────────────────────────────────────────────────────────────────
 router.post('/shipments/rates', optionalAuth, getRates);
-router.post('/shipments/book', optionalAuth, bookShipment);
-router.post('/shipments/:id/confirm-payment', optionalAuth, confirmPayment);
+router.post('/shipments/book', authenticate, bookShipment);
+router.post('/shipments/:id/confirm-payment', authenticate, confirmPayment);
 router.get('/shipments/track/:trackingNumber', trackShipment);
 router.post('/shipments/:id/cancel', optionalAuth, cancelShipment);
 router.get('/shipments/my', authenticate, getMyShipments);
-router.get('/shipments/:id/label', optionalAuth, downloadLabel);
+router.get('/shipments/:id/invoice', authenticate, downloadInvoice);
+router.get('/shipments/:id/label', authenticate, downloadLabel);
 
 // ── Payments ──────────────────────────────────────────────────────────────────
-router.post('/payments/stripe/intent', optionalAuth, createStripeIntent);
+router.post('/payments/stripe/intent', authenticate, createStripeIntent);
 router.post('/payments/stripe/webhook', stripeWebhook);
-router.post('/payments/paypal/order', optionalAuth, createPayPalOrder);
-router.post('/payments/paypal/capture', optionalAuth, capturePayPalOrder);
+router.post('/payments/paypal/order', authenticate, createPayPalOrder);
+router.post('/payments/paypal/capture', authenticate, capturePayPalOrder);
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 router.get('/admin/dashboard', authenticate, requireAdmin, getDashboardStats);
@@ -72,36 +75,23 @@ router.get('/admin/users', authenticate, requireAdmin, getAllUsers);
 router.get('/geo/postal', getPostal);
 
 // Country ISO code → full name map for countriesnow API
-const COUNTRY_NAMES: Record<string, string> = {
-  CA: 'Canada', US: 'United States', GB: 'United Kingdom', AU: 'Australia',
-  DE: 'Germany', FR: 'France', IN: 'India', PK: 'Pakistan', CN: 'China',
-  MX: 'Mexico', JP: 'Japan', AE: 'United Arab Emirates', SA: 'Saudi Arabia',
-  NL: 'Netherlands', IT: 'Italy', ES: 'Spain', BR: 'Brazil', ZA: 'South Africa',
-  SG: 'Singapore', HK: 'Hong Kong',
-};
+const COUNTRY_NAMES: Record<string, string> = Object.fromEntries(subdivisions.map(c => [c.code, c.name]));
 
-router.get('/geo/provinces', async (req, res) => {
-  const { country } = req.query as { country: string };
-  if (!country) return res.status(400).json({ error: 'country required' });
-  const countryName = COUNTRY_NAMES[country.toUpperCase()];
-  if (!countryName) return res.json([]);
-  try {
-    const r = await fetch('https://countriesnow.space/api/v0.1/countries/states', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ country: countryName }),
-    });
-    const data = await r.json() as any;
-    const states: { name: string; state_code: string }[] = data?.data?.states || [];
-    res.json(states.map(s => ({ label: s.name, value: s.state_code || s.name })));
-  } catch {
-    res.json([]);
+router.get('/geo/provinces', (req, res) => {
+  if (typeof req.query.country !== 'string' || !/^[A-Za-z]{2}$/.test(req.query.country)) {
+    return res.status(400).json({ error: 'Valid country required' });
   }
+  const country = req.query.country.toUpperCase();
+  const entry = subdivisions.find(c => c.code === country);
+  if (!entry) return res.status(400).json({ error: 'Unsupported country' });
+  return res.json(entry.states.map(s => ({ label: s.name, value: s.state_code?.replace(new RegExp('^' + country + '-'), '') || s.name })));
 });
 
 router.get('/geo/cities', async (req, res) => {
   const { country = 'CA', q = '' } = req.query as { country?: string; q?: string };
-  const countryName = COUNTRY_NAMES[(country as string).toUpperCase()] || 'Canada';
+  if (typeof country !== 'string' || typeof q !== 'string') return res.status(400).json({ error: 'Invalid query' });
+  const countryName = COUNTRY_NAMES[country.toUpperCase()];
+  if (!countryName) return res.json([]);
   try {
     const r = await fetch('https://countriesnow.space/api/v0.1/countries/cities', {
       method: 'POST',

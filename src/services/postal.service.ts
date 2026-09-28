@@ -1,3 +1,4 @@
+import { isPostalLookupReady } from '../utils/postal';
 export interface PostalResult {
   city: string;
   province: string;
@@ -55,6 +56,7 @@ export async function lookupPostal(country: string, postal: string): Promise<Pos
   country = country.trim().toUpperCase();
   postal = postal.trim().toUpperCase();
   const empty = { city: '', province: '' };
+  if (!isPostalLookupReady(country, postal)) return empty;
   const compact = postal.replace(/\s/g, '');
   if (country === 'CA') {
     if (!/^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\d[ABCEGHJ-NPRSTV-Z]\d$/.test(compact)) return empty;

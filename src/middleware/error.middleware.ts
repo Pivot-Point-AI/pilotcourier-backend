@@ -14,7 +14,7 @@ export const notFound = (req: Request, res: Response, next: NextFunction) => {
 };
 
 export const errorHandler = (err: AppError, req: Request, res: Response, _next: NextFunction) => {
-  const statusCode = err.statusCode || 500;
+  const statusCode = err.name === 'CastError' ? 400 : err.statusCode || 500;
 
   if (statusCode === 500) {
     logger.error(`[${req.method}] ${req.path} - ${err.message}`, { stack: err.stack });
@@ -22,7 +22,8 @@ export const errorHandler = (err: AppError, req: Request, res: Response, _next: 
 
   res.status(statusCode).json({
     success: false,
-    message: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    message: err.name === 'CastError' ? 'Invalid identifier.'
+      : statusCode >= 500 ? 'An unexpected error occurred. Please try again.'
+      : err.message || 'Request failed.',
   });
 };

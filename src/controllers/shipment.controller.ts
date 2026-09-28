@@ -6,6 +6,9 @@ import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
 import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
+import { ownedShipment, requestError } from '../utils/shipment-access';
+import { stripe, checkStripeIntent, settlePayment } from '../services/payment.service';
+import { isPostalFormatValid } from '../utils/postal';
 
 // Books the shipment with netParcel and attaches the returned label/tracking
 // number to the shipment doc. Used both by confirmPayment (synchronous, client-
@@ -34,6 +37,8 @@ export const generateLabelForShipment = async (shipment: IShipment): Promise<boo
 
     const shipPayload = {
       ship: {
+        shipper_type: shipment.shipper.addressType || 'consumer',
+        consignee_type: shipment.recipient.addressType || 'consumer',
         origin: {
           ...netparcelService.buildAddress(shipment.shipper),
           address_type: shipment.shipper.isResidential ? 'residential' : null,
@@ -135,12 +140,14 @@ const generateShipmentNumber = (): string => {
   return `${prefix}-${timestamp}-${random}`;
 };
 
-// netParcel total_price: older API returns cents ("3400" = $34.00), newer returns dollars ("14.89")
+// This endpoint returns decimal currency amounts. Magnitude never determines units.
 const parseNpPrice = (raw: string | number): number => {
-  const n = typeof raw === 'string' ? parseFloat(raw) : raw;
-  if (isNaN(n)) return 0;
-  // Heuristic: if value > 500 and has no decimal, treat as cents
-  return (n > 500 && Number.isInteger(n)) ? parseFloat((n / 100).toFixed(2)) : parseFloat(n.toFixed(2));
+  if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^\d+(?:\.\d+)?$/.test(raw.trim()))) {
+    throw new Error('Invalid amount in carrier rate response.');
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new Error('Invalid amount in carrier rate response.');
+  return Number(n.toFixed(2));
 };
 
 const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDate?: string): number => {
@@ -182,11 +189,26 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       pickupMethod, // 'schedule_pickup' | 'drop_off' | undefined
       specialServices = {},
       packages,
+      shipperType = 'consumer', consigneeType = 'consumer',
     } = req.body;
+
+    if (![shipperType, consigneeType].every(type => type === 'consumer' || type === 'business')) {
+      return res.status(400).json({ success: false, message: 'Party type must be consumer or business.' });
+    }
+    for (const [label, country, postal, city] of [
+      ['Origin', originCountry, originPostal, originCity],
+      ['Destination', destinationCountry, destinationPostal, destinationCity],
+    ]) {
+      if (typeof city !== 'string' || !city.trim()) return res.status(400).json({ success: false, message: `${label} city is required.` });
+      if (typeof country !== 'string' || !isPostalFormatValid(country, postal ?? '')) {
+        return res.status(400).json({ success: false, message: `${label} postal code is missing or invalid for the selected country.` });
+      }
+    }
 
     // Map frontend labels to valid netParcel packaging types
     const VALID_PACKAGING = ['My Packaging', 'Envelope', 'Pak', 'Pallet'];
     const resolvedPackaging = VALID_PACKAGING.includes(packagingType) ? packagingType : 'My Packaging';
+    if (!VALID_PACKAGING.includes(packagingType)) return res.status(400).json({ success: false, message: 'Unsupported packaging type.' });
 
     // Multi-package shipments: use the full packages[] array when provided (each package
     // rated individually by netParcel), falling back to the single flat weight/length/width/height
@@ -194,6 +216,18 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     const packageRows: any[] = Array.isArray(packages) && packages.length > 0
       ? packages
       : [{ length, width, height, weight, insuranceAmount, description, specialHandling, freightClass }];
+
+    for (const [index, p] of packageRows.entries()) {
+      if (!p || !Number.isFinite(Number(p.weight)) || Number(p.weight) <= 0) {
+        return res.status(400).json({ success: false, message: `Package ${index + 1}: weight must be greater than zero.` });
+      }
+      for (const dimension of ['length', 'width', 'height']) {
+        const value = Number(p[dimension] ?? 0);
+        if (!Number.isFinite(value) || value < 0 || (['My Packaging', 'Pallet'].includes(resolvedPackaging) && value === 0)) {
+          return res.status(400).json({ success: false, message: `Package ${index + 1}: enter a valid ${dimension}.` });
+        }
+      }
+    }
 
     // netParcel's API requires freight_class whenever packaging_type is "Pallet"
     if (resolvedPackaging === 'Pallet' && packageRows.some((p) => !p.freightClass)) {
@@ -262,6 +296,8 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
     // client has, and always send an explicit pick_up requirement.
     const ratePayload = {
       rate: {
+        shipper_type: shipperType,
+        consignee_type: consigneeType,
         origin: {
           country: originCountry,
           postal_code: cleanPostal(originPostal, originCountry) ?? '',
@@ -320,6 +356,10 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           adult_signature: !!specialServices.adultSignature,
           saturday_delivery: !!specialServices.saturdayDelivery,
           hold_for_pickup: !!specialServices.holdForPickup,
+          inside_pickup: !!specialServices.insidePickup,
+          inside_delivery: !!specialServices.insideDelivery,
+          tailgate_pickup: !!specialServices.tailgatePickup,
+          tailgate_delivery: !!specialServices.tailgateDelivery,
         },
         items: [{
           name: description || 'Package',
@@ -357,15 +397,14 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       npRates = npRates.filter((r: any) => r.service_code !== '380000');
       logger.info(`netParcel returned ${npRates.length} rates`);
       if (!npRates.length) {
-        const isInternational = originCountry !== destinationCountry;
-        const message = isInternational
-          ? 'No international shipping rates are currently available for this route. Please contact support or try a domestic shipment.'
-          : 'No shipping rates available for the selected route. Please check the addresses and try again.';
+        const message = 'No carrier returned a rate for these shipment details. Review the package weight, dimensions, packaging type, requested services and route, or contact support.';
         return res.status(422).json({ success: false, message });
       }
     } catch (err: any) {
       logger.error('netParcel getRates failed:', err?.message || err);
-      return res.status(502).json({ success: false, message: err?.message || 'Unable to fetch shipping rates. Please try again.' });
+      return res.status(err?.statusCode === 422 ? 422 : 502).json({ success: false,
+        message: err?.statusCode === 422 ? err.message : 'Unable to fetch shipping rates. Please try again.',
+        ...(err?.carrierErrors ? { carrierErrors: err.carrierErrors } : {}) });
     }
 
     const normalized = npRates.map((r: any) => ({
@@ -426,6 +465,39 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       return res.status(400).json({ success: false, message: 'A maximum of three customer references is supported.' });
     }
 
+    if (!userId) throw requestError(401, 'Authentication required.');
+    if (!shipper || !recipient || !Array.isArray(parcels) || !parcels.length || !selectedRate) {
+      throw requestError(400, 'Addresses, packages and a selected service are required.');
+    }
+    const quoteBody: Record<string, any> = {
+      packages: parcels, packagingType, specialServices,
+      weightUnit: parcels[0].weightUnit, dimensionUnit: parcels[0].dimensionUnit,
+      pickupMethod: pickupDetails?.method || 'drop_off',
+      pickupLocation: pickupDetails?.location, pickupInstructions: pickupDetails?.instructions,
+      readyHour: pickupDetails?.readyHour, readyMin: pickupDetails?.readyMin,
+      closeHour: pickupDetails?.closeHour, closeMin: pickupDetails?.closeMin,
+      shipperType: shipper.addressType || 'consumer', consigneeType: recipient.addressType || 'consumer',
+    };
+    for (const [prefix, address] of [['origin', shipper], ['destination', recipient]] as const) {
+      for (const [suffix, field] of Object.entries({ Postal: 'postalCode', City: 'city', Province: 'province', Country: 'country', Residential: 'isResidential', Name: 'name', Company: 'company', Street: 'street', Street2: 'street2', Phone: 'phone', Email: 'email' })) {
+        quoteBody[prefix + suffix] = address[field];
+      }
+    }
+    let quoteStatus = 200;
+    let quoteResult: any;
+    await getRates({ body: quoteBody } as Request, {
+      status(code: number) { quoteStatus = code; return this; },
+      json(data: any) { quoteResult = data; return this; },
+    } as Response, error => { throw error; });
+    if (quoteStatus !== 200) return res.status(quoteStatus).json(quoteResult);
+    const authoritativeRate = quoteResult.rates.find((rate: any) =>
+      String(rate.serviceCode) === String(selectedRate.serviceCode) &&
+      rate.currency === String(selectedRate.currency || '').toUpperCase());
+    if (!authoritativeRate || Number(selectedRate.totalCharge) !== authoritativeRate.totalCharge) {
+      return res.status(409).json({ success: false, code: authoritativeRate ? 'RATE_CHANGED' : 'RATE_UNAVAILABLE',
+        message: 'Rates have changed. Please review and select a current rate.', rates: quoteResult.rates });
+    }
+
     const shipmentNumber = generateShipmentNumber();
 
     const shipment = await Shipment.create({
@@ -437,7 +509,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       recipient,
       parcels,
       packagingType: packagingType || 'My Packaging',
-      selectedRate,
+      selectedRate: authoritativeRate,
       shipmentType,
       pickupDetails,
       specialServices,
@@ -445,8 +517,9 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       customsInvoice,
       status: 'pending_payment',
       payment: {
-        amount: selectedRate.totalCharge,
-        currency: selectedRate.currency || 'CAD',
+        amount: authoritativeRate.totalCharge,
+        currency: authoritativeRate.currency,
+        priceVerified: true,
         status: 'pending',
       },
     });
@@ -468,31 +541,21 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
     const { id } = req.params;
     const { method, transactionId } = req.body;
 
-    const shipment = await Shipment.findById(id);
-    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
-
-    shipment.payment.method = method;
-    shipment.payment.status = 'completed';
-    shipment.payment.transactionId = transactionId;
-    shipment.payment.paidAt = new Date();
-    shipment.status = 'paid';
-
-    // Avoid double-booking with netParcel if the payment webhook already generated
-    // the label for this shipment in a race with this request.
-    const labelGenerated = shipment.netparcelOrderId ? true : await generateLabelForShipment(shipment);
-
-    await shipment.save();
-
-    const contactEmail = shipment.guestEmail || shipment.recipient.email || '';
-    if (contactEmail) {
-      await emailService.sendBookingConfirmation(contactEmail, shipment, shipment.guestPhone);
+    const owned = await ownedShipment(req, id);
+    if (method !== 'stripe' || typeof transactionId !== 'string' || transactionId !== owned.payment.stripeIntentId) {
+      throw requestError(400, 'A verified Stripe payment is required. Use the PayPal capture endpoint for PayPal.');
     }
+    const intent = await stripe.paymentIntents.retrieve(transactionId);
+    const check = checkStripeIntent(intent, owned);
+    if (!check.ok) throw requestError(400, 'Payment verification failed.');
+    const shipment = await settlePayment(owned, 'stripe', intent.id);
+    const labelGenerated = !!shipment.netparcelOrderId;
 
     res.json({
       success: true,
       message: labelGenerated
         ? 'Payment confirmed and label generated.'
-        : 'Payment confirmed. Label generation failed and will be retried automatically.',
+        : 'Payment confirmed. Your label is pending; contact support if it remains unavailable.',
       shipment: {
         shipmentNumber: shipment.shipmentNumber,
         trackingNumber: shipment.trackingNumber,
@@ -558,10 +621,15 @@ export const downloadLabel = async (req: Request, res: Response, next: NextFunct
     const { id } = req.params;
     const userId = (req as any).user?.userId;
 
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid shipment ID.' });
+    }
+    if (!userId) return res.status(401).json({ success: false, message: 'Authentication required.' });
+
     const shipment = await Shipment.findById(id);
     if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
 
-    if (shipment.userId && userId && shipment.userId.toString() !== userId) {
+    if (!shipment.userId || shipment.userId.toString() !== userId) {
       return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
