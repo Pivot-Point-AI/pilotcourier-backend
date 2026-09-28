@@ -108,43 +108,26 @@
       "expected": {
         "city": "Cupertino",
         "province": "CA",
-        "source": "nominatim"
+        "source": "zippopotam-zip"
       },
       "providers": [
         {
-          "url": "https://nominatim.openstreetmap.org/search?postalcode=95014&countrycodes=us&format=json&addressdetails=1&accept-language=en&limit=1",
+          "url": "https://api.zippopotam.us/US/95014",
           "status": 200,
-          "data": [
-            {
-              "place_id": 381583212,
-              "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
-              "postcode_id": "Pus:95014",
-              "lat": "37.3178092",
-              "lon": "-122.0372281",
-              "class": "place",
-              "type": "postcode",
-              "place_rank": 21,
-              "importance": 0.12000999999999995,
-              "addresstype": "postcode",
-              "name": "95014",
-              "display_name": "95014, Cupertino, Santa Clara County, California, United States",
-              "address": {
-                "postcode": "95014",
-                "city": "Cupertino",
-                "county": "Santa Clara County",
+          "data": {
+            "country": "United States",
+            "country abbreviation": "US",
+            "post code": "95014",
+            "places": [
+              {
+                "place name": "Cupertino",
+                "longitude": "-122.0449",
+                "latitude": "37.318",
                 "state": "California",
-                "ISO3166-2-lvl4": "US-CA",
-                "country": "United States",
-                "country_code": "us"
-              },
-              "boundingbox": [
-                "37.0924881",
-                "37.5431215",
-                "-122.3193557",
-                "-121.7551325"
-              ]
-            }
-          ]
+                "state abbreviation": "CA"
+              }
+            ]
+          }
         }
       ]
     },
@@ -162,6 +145,11 @@
         "source": "nominatim"
       },
       "providers": [
+        {
+          "url": "https://api.zippopotam.us/US/22162",
+          "status": 404,
+          "data": {}
+        },
         {
           "url": "https://nominatim.openstreetmap.org/search?postalcode=22162-1010&countrycodes=us&format=json&addressdetails=1&accept-language=en&limit=1",
           "status": 200,

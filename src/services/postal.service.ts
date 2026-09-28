@@ -50,6 +50,24 @@ function fallbackCity(place: any): string {
     .trim();
 }
 
+// The ZIP database holds the USPS mailing city, which carriers check against the
+// ZIP. Nominatim often has only the county (90001 → Los Angeles County) or a
+// neighbouring municipality (60601 → Riverside Township instead of Chicago).
+async function lookupUsZip(zip: string): Promise<PostalResult | null> {
+  try {
+    const response = await fetch(`https://api.zippopotam.us/US/${zip}`, { signal: AbortSignal.timeout(4000) });
+    if (!response.ok) return null;
+    const data = await response.json() as any;
+    const places: any[] = Array.isArray(data.places) ? data.places : [];
+    // GeoNames names Manhattan "New York City"; the USPS name is "New York".
+    const cities = [...new Set(places.map(p => String(p['place name'] || '').trim().replace(/^New York City$/i, 'New York')).filter(Boolean))];
+    const states = [...new Set(places.map(p => String(p['state abbreviation'] || '')).filter(Boolean))];
+    if (!cities.length) return null;
+    return { city: cities.length === 1 ? cities[0] : '', province: states.length === 1 ? states[0] : '',
+      source: 'zippopotam-zip', ...(cities.length > 1 ? { cities } : {}) };
+  } catch { return null; }
+}
+
 // An FSA is an area, not address validation. Do not pick an arbitrary city
 // when the fallback contains several municipalities.
 export async function lookupPostal(country: string, postal: string): Promise<PostalResult> {
@@ -61,6 +79,10 @@ export async function lookupPostal(country: string, postal: string): Promise<Pos
   if (country === 'CA') {
     if (!/^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\d[ABCEGHJ-NPRSTV-Z]\d$/.test(compact)) return empty;
     postal = `${compact.slice(0, 3)} ${compact.slice(3)}`;
+  }
+  if (country === 'US') {
+    const zip = await lookupUsZip(compact.slice(0, 5));
+    if (zip) return zip;
   }
   let exact: PostalResult = empty;
   try {

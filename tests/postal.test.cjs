@@ -63,9 +63,42 @@ test('both providers failing permits manual entry', async () => {
   const r = await request('country=CA&postal=L4W2S7', [new Error('offline'), new Error('offline')]);
   assert.deepEqual(r.data, { city: '', province: '' });
 });
-test('US lookup retains state and never uses Canadian fallback', async () => {
-  const r = await request('country=US&postal=10001', [[{ address: { city: 'New York', 'ISO3166-2-lvl4': 'US-NY' } }]]);
+test('US ZIP fills the mailing city and state from the ZIP database only', async () => {
+  const r = await request('country=US&postal=90001', [{ places: [place('Los Angeles', 'CA')] }]);
+  assert.deepEqual(r.data, { city: 'Los Angeles', province: 'CA', source: 'zippopotam-zip' });
+  assert.deepEqual(r.calls, ['https://api.zippopotam.us/US/90001']);
+});
+test('US lookup uses the USPS name for Manhattan and never the Canadian FSA fallback', async () => {
+  const r = await request('country=US&postal=10001', [{ places: [place('New York City', 'NY')] }]);
+  assert.equal(r.data.city, 'New York');
   assert.equal(r.data.province, 'NY');
+  assert.equal(r.calls.length, 1);
+});
+test('US ZIP+4 looks up the 5-digit ZIP and keeps directional city names', async () => {
+  const r = await request('country=US&postal=91601-1234', [{ places: [place('North Hollywood', 'CA')] }]);
+  assert.equal(r.data.city, 'North Hollywood');
+  assert.equal(r.data.province, 'CA');
+  assert.equal(r.calls[0], 'https://api.zippopotam.us/US/91601');
+});
+test('US ZIP shared by several cities offers them without choosing one', async () => {
+  const r = await request('country=US&postal=12345', [{ places: [place('Schenectady', 'NY'), place('Rotterdam', 'NY')] }]);
+  assert.equal(r.data.city, '');
+  assert.equal(r.data.province, 'NY');
+  assert.deepEqual(r.data.cities, ['Schenectady', 'Rotterdam']);
+});
+test('US ZIP database outage falls back to Nominatim', async () => {
+  const r = await request('country=US&postal=90001', [new Error('offline'), [{ address: { city: 'Los Angeles', 'ISO3166-2-lvl4': 'US-CA' } }]]);
+  assert.deepEqual(r.data, { city: 'Los Angeles', province: 'CA', source: 'nominatim' });
+  assert.match(r.calls[1], /nominatim\.openstreetmap\.org\/search\?postalcode=90001&countrycodes=us/);
+});
+test('US ZIP with no places falls back to Nominatim; both failing permits manual entry', async () => {
+  const r = await request('country=US&postal=90001', [{ places: [] }, new Error('offline')]);
+  assert.deepEqual(r.data, { city: '', province: '' });
+  assert.equal(r.calls.length, 2);
+});
+test('other countries still use Nominatim only', async () => {
+  const r = await request('country=FR&postal=75001', [[{ address: { county: 'Paris' } }]]);
+  assert.equal(r.data.city, '');
   assert.equal(r.calls.length, 1);
 });
 const fs = require('node:fs');
