@@ -3,6 +3,7 @@ import logger from '../utils/logger';
 
 interface EmailOptions {
   to: string;
+  replyTo?: { name: string; address: string };
   subject: string;
   html: string;
   attachments?: Array<{
@@ -12,6 +13,9 @@ interface EmailOptions {
     contentType?: string;
   }>;
 }
+
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 
 class EmailService {
   private transporter: nodemailer.Transporter;
@@ -245,11 +249,32 @@ class EmailService {
     });
   }
 
-  private async send(options: EmailOptions): Promise<void> {
+  // Contact form: goes to the support inbox; Reply-To is the sender so support can answer directly.
+  // Every visitor-supplied value is HTML-escaped. Throws if delivery fails so the form can say so.
+  async sendContactMessage(msg: { name: string; email: string; subject: string; message: string }): Promise<void> {
+    const content = `
+      <div class="greeting">New contact form message</div>
+      <div class="card">
+        <div class="card-row"><span class="card-label">From</span><span class="card-value">${escapeHtml(msg.name)} &lt;${escapeHtml(msg.email)}&gt;</span></div>
+        <div class="card-row"><span class="card-label">Subject</span><span class="card-value">${escapeHtml(msg.subject)}</span></div>
+      </div>
+      <p class="text" style="white-space: pre-wrap;">${escapeHtml(msg.message)}</p>
+      <p class="text">Reply to this email to answer ${escapeHtml(msg.name)} directly.</p>
+    `;
+    await this.send({
+      to: process.env.CONTACT_EMAIL || 'support@pilotcourier.com',
+      replyTo: { name: msg.name, address: msg.email },
+      subject: `Contact form: ${msg.subject}`,
+      html: this.getBaseTemplate(content, 'New contact message'),
+    }, true);
+  }
+
+  private async send(options: EmailOptions, rethrow = false): Promise<void> {
     try {
       await this.transporter.sendMail({
         from: `"Pilot Courier" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
         to: options.to,
+        replyTo: options.replyTo,
         subject: options.subject,
         html: options.html,
         attachments: options.attachments,
@@ -257,6 +282,7 @@ class EmailService {
       logger.info(`Email sent to ${options.to}: ${options.subject}`);
     } catch (error) {
       logger.error(`Failed to send email to ${options.to}:`, error);
+      if (rethrow) throw error;
     }
   }
 }

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import Shipment from '../models/Shipment';
 import User from '../models/User';
+import NewsletterSubscriber from '../models/NewsletterSubscriber';
 import emailService from '../services/email.service';
 
 // GET /api/admin/shipments
@@ -156,6 +157,16 @@ export const getAllUsers = async (req: Request, res: Response, next: NextFunctio
       users,
       pagination: { page: +page, limit: +limit, total, pages: Math.ceil(total / +limit) },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/admin/newsletter — footer sign-ups, newest first (for export to a mailing tool)
+export const getNewsletterSubscribers = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const subscribers = await NewsletterSubscriber.find().sort({ createdAt: -1 }).select('email source createdAt -_id').lean();
+    res.json({ success: true, total: subscribers.length, subscribers });
   } catch (error) {
     next(error);
   }

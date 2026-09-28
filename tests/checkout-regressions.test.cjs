@@ -146,6 +146,42 @@ test('booking form has no controls that report success or do nothing',()=>{
  for(const field of panel.match(/<input\b[^>]*>/g))assert.match(field,/value=|checked=/,'AddressPanel input without state: '+field);
  const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/authApi\.addAddress\(/);assert.match(client,/notifyRecipient,\r?\n/);assert.match(client,/writeLocal\(pickupPrefKey/);
 });
+test('contact form emails support with escaped content and reply-to, and reports delivery failure',async()=>{
+ const contact=require('../dist/controllers/contact.controller'),emails=require('../dist/services/email.service').default;
+ let mail;stub(emails.transporter,'sendMail',async m=>{mail=m});
+ const body={name:'Ann <b>',email:'ann@example.com',subject:'Hi\r\nBcc: x@evil.test',message:'<script>x</script>'};
+ let r=await invoke(contact.submitContact,{body});assert.equal(r.status,200);
+ assert.equal(mail.to,process.env.CONTACT_EMAIL||'support@pilotcourier.com');assert.deepEqual(mail.replyTo,{name:'Ann <b>',address:'ann@example.com'});
+ assert.equal(mail.subject,'Contact form: Hi Bcc: x@evil.test');assert.doesNotMatch(mail.html,/<script>|<b>/);assert.match(mail.html,/&lt;script&gt;x&lt;\/script&gt;/);
+ for(const bad of [{...body,email:'nope'},{...body,message:''},{...body,name:'  '},{...body,subject:undefined}])assert.equal((await invoke(contact.submitContact,{body:bad})).status,400);
+ mail=undefined;assert.equal((await invoke(contact.submitContact,{body:{...body,website:'http://spam.example'}})).status,200);assert.equal(mail,undefined);
+ stub(emails.transporter,'sendMail',async()=>{throw Error('smtp down')});r=await invoke(contact.submitContact,{body});assert.equal(r.status,502);assert.equal(r.data.success,false);
+});
+test('newsletter stores each address once and answers the same for repeats and bots',async()=>{
+ const contact=require('../dist/controllers/contact.controller'),Subscriber=require('../dist/models/NewsletterSubscriber').default;
+ const calls=[];stub(Subscriber,'updateOne',async(...a)=>{calls.push(a);return{}});
+ assert.equal((await invoke(contact.subscribeNewsletter,{body:{email:'  New@Example.COM '}})).status,200);
+ assert.deepEqual(calls[0],[{email:'new@example.com'},{$setOnInsert:{email:'new@example.com',source:'footer'}},{upsert:true}]);
+ stub(Subscriber,'updateOne',async()=>{throw Object.assign(Error('duplicate'),{code:11000})});assert.equal((await invoke(contact.subscribeNewsletter,{body:{email:'new@example.com'}})).status,200);
+ stub(Subscriber,'updateOne',()=>assert.fail('database'));
+ assert.equal((await invoke(contact.subscribeNewsletter,{body:{email:'not-an-email'}})).status,400);
+ assert.equal((await invoke(contact.subscribeNewsletter,{body:{email:'bot@example.com',website:'x'}})).status,200);
+});
+test('contact and newsletter routes are public and rate limited; subscriber list is admin-only',async()=>{
+ const express=require('express'),jwt=require('jsonwebtoken'),router=require('../dist/routes').default,Subscriber=require('../dist/models/NewsletterSubscriber').default;
+ stub(Subscriber,'updateOne',async()=>({}));stub(Subscriber,'find',()=>assert.fail('non-admin reached subscriber list'));
+ const app=express();app.use(express.json());app.use('/api',router);app.use(errorHandler);const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});
+ try{const base=`http://127.0.0.1:${server.address().port}/api`;
+  assert.equal((await fetch(base+'/admin/newsletter')).status,401);
+  assert.equal((await fetch(base+'/admin/newsletter',{headers:{authorization:'Bearer '+jwt.sign({userId:owner,role:'customer'},process.env.JWT_SECRET||'fallback_secret')}})).status,403);
+  const statuses=[];for(let i=0;i<11;i++)statuses.push((await fetch(base+'/newsletter/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:`n${i}@example.com`})})).status);
+  assert.deepEqual(statuses,[...Array(10).fill(200),429]);
+ }finally{await new Promise(resolve=>server.close(resolve))}
+});
+test('contact and newsletter forms submit to the API instead of faking success',()=>{
+ const c=fs.readFileSync('../frontend/src/app/contact/ContactClient.tsx','utf8'),f=fs.readFileSync('../frontend/src/components/layout/Footer.tsx','utf8');
+ assert.doesNotMatch(c,/setTimeout/);assert.match(c,/formsApi\.contact\(/);assert.doesNotMatch(f,/onSubmit=\{e => e\.preventDefault\(\)\}/);assert.match(f,/formsApi\.subscribe\(/);
+});
 test('database casting errors have safe response',()=>{let response;errorHandler(Object.assign(new Error('Cast to ObjectId failed secret'),{name:'CastError'}),{method:'GET',path:'/'},{status(n){assert.equal(n,400);return this},json(v){response=v}},()=>{});assert.deepEqual(response,{success:false,message:'Invalid identifier.'})});
 test('invoice endpoint returns actual PDF without fetching a label',async()=>{const s=document();s.payment.status='completed';s.createdAt=new Date('2026-09-28');stub(Shipment,'findById',async()=>s);stub(carrier,'getOrder',()=>assert.fail('label fetch'));const r=await invoke(downloadInvoice);assert.equal(r.status,200);assert.match(r.data.invoice,/^data:application\/pdf;base64,/);const pdf=Buffer.from(r.data.invoice.split(',')[1],'base64');assert.equal(pdf.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.includes(Buffer.from('Invoice NPI')));assert.equal(r.data.label,undefined)});
 test('invoice requires owner and completed payment',async()=>{stub(Shipment,'findById',async()=>document());assert.equal((await invoke(downloadInvoice)).status,409);assert.equal((await invoke(downloadInvoice,{user:{userId:'other'}})).status,403)});

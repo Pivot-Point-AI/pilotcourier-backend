@@ -12,6 +12,10 @@ import logger from './utils/logger';
 
 const app = express();
 
+// The API runs behind nginx; trust that hop so rate limits count each visitor,
+// not the proxy's single address. Set TRUST_PROXY_HOPS=0 when serving directly.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 1));
+
 // ── Security ───────
 // ─────────────────────────────────────────────────────────
 app.use(helmet());

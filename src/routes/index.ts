@@ -1,7 +1,9 @@
 import subdivisions from '../data/subdivisions.json';
 import { downloadInvoice } from '../controllers/invoice.controller';
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { getPostal } from '../controllers/geo.controller';
+import { submitContact, subscribeNewsletter } from '../controllers/contact.controller';
 import {
   register, login, getMe, updateProfile, updateFullProfile,
   forgotPassword, resetPassword,
@@ -13,7 +15,7 @@ import {
 } from '../controllers/auth.controller';
 import { getRates, bookShipment, confirmPayment, trackShipment, cancelShipment, getMyShipments, downloadLabel } from '../controllers/shipment.controller';
 import { createStripeIntent, stripeWebhook, createPayPalOrder, capturePayPalOrder } from '../controllers/payment.controller';
-import { getAllShipments, getDashboardStats, updateShipmentStatus, overridePrice, getAllUsers } from '../controllers/admin.controller';
+import { getAllShipments, getDashboardStats, updateShipmentStatus, overridePrice, getAllUsers, getNewsletterSubscribers } from '../controllers/admin.controller';
 import { authenticate, optionalAuth, requireAdmin } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -69,6 +71,19 @@ router.get('/admin/shipments', authenticate, requireAdmin, getAllShipments);
 router.patch('/admin/shipments/:id/status', authenticate, requireAdmin, updateShipmentStatus);
 router.patch('/admin/shipments/:id/price', authenticate, requireAdmin, overridePrice);
 router.get('/admin/users', authenticate, requireAdmin, getAllUsers);
+router.get('/admin/newsletter', authenticate, requireAdmin, getNewsletterSubscribers);
+
+// ── Public forms (contact, newsletter) ───────────────────────────────────────
+// Stricter than the global limit: each submission can send an email to support.
+const formLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many submissions. Please try again later.' },
+});
+router.post('/contact', formLimiter, submitContact);
+router.post('/newsletter/subscribe', formLimiter, subscribeNewsletter);
 
 // ── Geo lookups (proxy to netParcel) ─────────────────────────────────────────
 // Exact lookup first; Canadian FSA fallback fills gaps in provider coverage.
