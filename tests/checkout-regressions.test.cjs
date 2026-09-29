@@ -91,9 +91,18 @@ test('international customs invoice uses the documented netParcel field names',a
  const s=document();s.shipmentType='international';
  s.customsInvoice={reasonForExport:'Sale',taxType:'VAT',taxId:'GB123456789',currency:'USD',totalValue:40,products:[{quantity:2,description:'Cotton T-shirt',hsCode:'6109.10',madeIn:'CA',cusma:true,section232:true,unitPrice:20,totalPrice:40}]};
  await controller.generateLabelForShipment(s);
- assert.deepEqual(sent.ship.customs_invoice,{reason_for_export:'Sale',invoice_currency:'USD',tax_type:'VAT',tax_id:'GB123456789',items:[{description:'Cotton T-shirt',harmonized_code:'6109.10',origin_country_code:'CA',quantity:2,unit_price:20,cusma:true}]});
+ assert.deepEqual(sent.ship.customs_invoice,{reason_for_export:'Sale',invoice_currency:'USD',tax_type:'VAT',tax_id:'GB123456789',items:[{description:'Cotton T-shirt',harmonized_code:'6109.10',origin_country_code:'CA',quantity:2,unit_price:20,cusma:true,section232:true}]});
  s.customsInvoice.taxType='HST';await controller.generateLabelForShipment(s);assert.equal(sent.ship.customs_invoice.tax_type,undefined);assert.equal(sent.ship.customs_invoice.tax_id,undefined);
  delete s.customsInvoice.reasonForExport;await controller.generateLabelForShipment(s);assert.equal(sent.ship.customs_invoice.reason_for_export,'Sale');
+});
+test('CUSMA is never forwarded for a product not Made In the US, Canada or Mexico, even if the client claims it',async()=>{
+ let sent;stub(carrier,'createShipment',async p=>{sent=p;return{order_id:1,documents:[]}});
+ const s=document();s.shipmentType='international';
+ s.customsInvoice={currency:'CAD',totalValue:40,products:[{quantity:1,description:'Ceramic mug',hsCode:'6912.00',madeIn:'CN',cusma:true,unitPrice:40,totalPrice:40}]};
+ await controller.generateLabelForShipment(s);
+ assert.equal(sent.ship.customs_invoice.items[0].cusma,false);
+ s.customsInvoice.products[0].madeIn='US';await controller.generateLabelForShipment(s);
+ assert.equal(sent.ship.customs_invoice.items[0].cusma,true);
 });
 test('international booking defaults reason for export to Sale and requires HS codes before re-rating',async()=>{
  stub(carrier,'getRates',()=>assert.fail('carrier'));stub(Shipment,'create',()=>assert.fail('database'));

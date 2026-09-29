@@ -81,6 +81,10 @@ export const CUSTOMS_EXPORT_REASONS = ['Sale', 'Sample', 'Repair', 'Gift', 'Retu
 // netParcel's own Rate & Ship form never asks for a reason for export, but the API requires one for
 // international non-document shipments, so the customer isn't asked either and Sale is sent.
 export const DEFAULT_EXPORT_REASON = 'Sale';
+
+// CUSMA (Canada-United States-Mexico Agreement) preferential tariff treatment only applies to goods
+// originating in one of these three countries; matches the frontend's booking form gate.
+export const CUSMA_COUNTRIES = ['US', 'CA', 'MX'];
 export const CUSTOMS_TAX_TYPES = ['EIN', 'GBVAT', 'IOSS', 'SSN', 'VAT', 'VOEC'];
 
 interface NpCustomsInvoice {
@@ -95,6 +99,7 @@ interface NpCustomsInvoice {
     quantity: number;
     unit_price: number;
     cusma: boolean;
+    section232: boolean;
   }>;
 }
 
@@ -327,6 +332,7 @@ class NetParcelService {
       hsCode?: string;
       madeIn: string;
       cusma?: boolean;
+      section232?: boolean;
       unitPrice: number;
     }>;
   }): NpCustomsInvoice {
@@ -342,7 +348,9 @@ class NetParcelService {
         origin_country_code: p.madeIn,
         quantity: p.quantity,
         unit_price: p.unitPrice,
-        cusma: !!p.cusma,
+        // Never forward a CUSMA claim for goods not Made In the US/Canada/Mexico, even if a client sent one
+        cusma: CUSMA_COUNTRIES.includes(p.madeIn) && !!p.cusma,
+        section232: !!p.section232,
       })),
     };
   }
