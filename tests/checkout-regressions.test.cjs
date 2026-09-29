@@ -115,8 +115,22 @@ test('international booking defaults reason for export to Sale and requires HS c
  assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{currency:'CAD',products:[product]}}})).status,201);assert.equal(saved.customsInvoice.reasonForExport,'Sale');
  assert.equal((await invoke(controller.bookShipment,{body:{...intl,customsInvoice:{reasonForExport:'Gift',products:[product]}}})).status,201);assert.equal(saved.customsInvoice.reasonForExport,'Gift');
  // netParcel's Rate & Ship form has no reason-for-export field, so the booking page doesn't ask for one either
- const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.doesNotMatch(client,/reasonForExport/);assert.doesNotMatch(client,/section232/);
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.doesNotMatch(client,/reasonForExport/);
  assert.doesNotMatch(fs.readFileSync('../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx','utf8'),/Reason for Export/i);
+});
+test('the booking page declares Section 232 the same way netParcel\'s own form does: required only for a US destination with a restricted HS code',()=>{
+ const step=fs.readFileSync('../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx','utf8');
+ assert.match(step,/232\?/);assert.match(step,/isSection232Restricted/);assert.match(step,/recipient\.country === 'US'/);
+ const constants=fs.readFileSync('../frontend/src/app/booking/_lib/constants.ts','utf8');
+ const isSection232Restricted=hsCode=>{
+   const m=constants.match(/SECTION_232_HTS_PREFIXES = \[([\s\S]*?)\];/);
+   const prefixes=JSON.parse(('['+m[1]+']').replace(/,(\s*\])/,'$1'));
+   const cleaned=String(hsCode||'').replace(/\D/g,'');
+   return !!cleaned&&prefixes.some(p=>cleaned.startsWith(p));
+ };
+ assert.equal(isSection232Restricted('7208.10'),true); // hot-rolled steel, no US carve-out needed to test the prefix match
+ assert.equal(isSection232Restricted('6109.10'),false); // cotton T-shirt, not on the list
+ assert.equal(isSection232Restricted(''),false);
 });
 test('package inputs accept two decimals and volumetric weight uses one factor in both unit systems',()=>{
  for(const file of ['../frontend/src/app/quote/_components/PackageDetailsSection.tsx','../frontend/src/app/booking/_components/ShipmentDetailsStep.tsx']){
