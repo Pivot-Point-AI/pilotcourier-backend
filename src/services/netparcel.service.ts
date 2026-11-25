@@ -354,49 +354,6 @@ class NetParcelService {
       })),
     };
   }
-
-  // ── Mock rates for dev/testing when credentials aren't available ──────────
-
-  getMockRates(weight: number, currency = 'CAD'): NpRate[] {
-    const base = 12.99 + weight * 2.5;
-    const future = (days: number) =>
-      new Date(Date.now() + days * 86400000).toISOString().split('T')[0] + ' 17:00:00';
-
-    return [
-      {
-        service_name: 'UPS Standard',
-        service_code: '204',
-        total_price: String((base).toFixed(0)),
-        currency,
-        min_delivery_date: future(5),
-        max_delivery_date: future(5),
-      },
-      {
-        service_name: 'UPS Expedited',
-        service_code: '201',
-        total_price: String((base + 800).toFixed(0)),
-        currency,
-        min_delivery_date: future(3),
-        max_delivery_date: future(3),
-      },
-      {
-        service_name: 'UPS Express',
-        service_code: '200',
-        total_price: String((base + 1500).toFixed(0)),
-        currency,
-        min_delivery_date: future(2),
-        max_delivery_date: future(2),
-      },
-      {
-        service_name: 'Purolator PurolatorGround',
-        service_code: '2016',
-        total_price: String((base + 200).toFixed(0)),
-        currency,
-        min_delivery_date: future(4),
-        max_delivery_date: future(4),
-      },
-    ];
-  }
 }
 
 export { NpRate, NpShipResponse };

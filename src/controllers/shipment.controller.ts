@@ -9,6 +9,7 @@ import { tagRates, normalizeDeliveryDate } from '../utils/rate-display';
 import { ownedShipment, requestError } from '../utils/shipment-access';
 import { stripe, checkStripeIntent, settlePayment } from '../services/payment.service';
 import { isPostalFormatValid } from '../utils/postal';
+import { CANCELLATION_DISPATCH_FEE } from '../utils/company';
 
 // Books the shipment with netParcel and attaches the returned label/tracking
 // number to the shipment doc. Used both by confirmPayment (synchronous, client-
@@ -388,8 +389,8 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         },
         // Explicit Pickup/Drop-Off — required by netParcel to match Rate & Ship pricing.
         // Defaults to Drop-Off when not specified (same as netParcel's own quote screens and as
-        // bookShipment's re-quote). Pickup is only requested when the customer chooses it; it costs
-        // about $3.50-$4.50 more on Canada Post and UPS.
+        // bookShipment's re-quote). Pickup is only requested when the customer chooses it; some
+        // carriers price it higher, and the price always comes from netParcel.
         pick_up: pickupMethod !== 'schedule_pickup'
           ? { required: false }
           : {
@@ -796,8 +797,8 @@ export const cancelShipment = async (req: Request, res: Response, next: NextFunc
       refundAmount = shipment.payment.amount || 0;
       refundNote = 'Full refund — cancelled within 24 hours.';
     } else if (shipment.status === 'pickup_scheduled') {
-      refundAmount = Math.max(0, (shipment.payment.amount || 0) - 25);
-      refundNote = '$25 deducted for driver dispatch.';
+      refundAmount = Math.max(0, (shipment.payment.amount || 0) - CANCELLATION_DISPATCH_FEE);
+      refundNote = `$${CANCELLATION_DISPATCH_FEE.toFixed(2)} deducted for driver dispatch.`;
     } else {
       refundNote = 'Refund requires written review (after 24h).';
       refundAmount = 0;

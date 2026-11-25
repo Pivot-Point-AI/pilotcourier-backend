@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import logger from '../utils/logger';
-import { COMPANY_EMAIL } from '../utils/company';
+import { COMPANY_EMAIL, CANCELLATION_DISPATCH_FEE } from '../utils/company';
 
 interface EmailOptions {
   to: string;
@@ -124,7 +124,7 @@ class EmailService {
       <a href="${process.env.FRONTEND_URL}/track?number=${shipment.trackingNumber}" class="btn">Track Your Shipment</a>
       
       <div class="divider"></div>
-      <p class="text"><strong>Cancellation Policy:</strong> Full refund if cancelled same day and documents unused. After 24 hours or pickup, written request required. $25 fee if cancelled on driver arrival.</p>
+      <p class="text"><strong>Cancellation Policy:</strong> Full refund if cancelled same day and documents unused. After 24 hours or pickup, written request required. $${CANCELLATION_DISPATCH_FEE.toFixed(2)} fee if cancelled on driver arrival.</p>
     `;
 
     const attachments = shipment.labelBase64
