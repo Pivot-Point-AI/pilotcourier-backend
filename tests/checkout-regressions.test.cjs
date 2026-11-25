@@ -293,3 +293,11 @@ for(const packagingType of ['My Packaging','Envelope','Pak','Pallet'])test(`quot
 });
 test('carrier HTTP validation errors retain the actual package limit',async()=>{stub(carrier.client,'post',async()=>{throw{response:{status:422,data:{errors:[{errorMessage:'Weight exceeds carrier limit.'}]}}}});const r=await invoke(controller.getRates,{body:quote});assert.equal(r.status,422);assert.match(r.data.message,/Weight exceeds carrier limit/)});
 test('Stripe does not expose a payment secret when booking was cancelled during intent creation',async()=>{const s=document();s.payment.stripeIntentId=undefined;stub(Shipment,'findById',async()=>s);stub(Shipment,'findOneAndUpdate',async()=>s);stub(payment.stripe.paymentIntents,'create',async()=>({id:'pi_new',client_secret:'must-not-return'}));stub(Shipment,'updateOne',async()=>({matchedCount:0}));const r=await invoke(payments.createStripeIntent,{body:{shipmentId:id}});assert.equal(r.status,409);assert.equal(r.data.clientSecret,undefined)});
+
+test('quotes are priced for drop-off unless the customer asks for a pickup',async()=>{
+ let payload;stub(carrier,'getRates',async p=>{payload=p;return[raw]});
+ await invoke(controller.getRates,{body:{...quote}});assert.equal(payload.rate.pick_up.required,false);
+ await invoke(controller.getRates,{body:{...quote,pickupMethod:'drop_off'}});assert.equal(payload.rate.pick_up.required,false);
+ await invoke(controller.getRates,{body:{...quote,pickupMethod:'schedule_pickup'}});assert.equal(payload.rate.pick_up.required,true);
+ const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/useState<'schedule_pickup' \| 'drop_off'>\('drop_off'\)/);
+});

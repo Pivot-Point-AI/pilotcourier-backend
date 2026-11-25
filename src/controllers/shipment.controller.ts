@@ -382,8 +382,10 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           email: destinationEmail || undefined,
         },
         // Explicit Pickup/Drop-Off — required by netParcel to match Rate & Ship pricing.
-        // Defaults to Pickup (matches the booking flow's default) when not specified.
-        pick_up: pickupMethod === 'drop_off'
+        // Defaults to Drop-Off when not specified (same as netParcel's own quote screens and as
+        // bookShipment's re-quote). Pickup is only requested when the customer chooses it; it costs
+        // about $3.50-$4.50 more on Canada Post and UPS.
+        pick_up: pickupMethod !== 'schedule_pickup'
           ? { required: false }
           : {
               required: true,
