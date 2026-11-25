@@ -15,6 +15,11 @@ import { isPostalFormatValid } from '../utils/postal';
 // initiated) and by the Stripe/PayPal webhooks as a safety net so a label still
 // gets generated if the client never calls confirm-payment after paying.
 // Does not save() — caller is responsible for persisting.
+// netParcel lists every FedEx service (domestic, US and international) as "Drop-Off Only": a carrier
+// pickup cannot be arranged for them. The FedEx price is the same with or without pickup.
+export const isDropOffOnlyService = (...names: unknown[]): boolean =>
+  names.some(n => /^fedex\b/i.test(String(n ?? '').trim()));
+
 export const generateLabelForShipment = async (shipment: IShipment): Promise<boolean> => {
   try {
     const pd = shipment.pickupDetails;
@@ -486,6 +491,7 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         transitDays,
         estimatedDelivery: resolveDeliveryDate(r.max_delivery_date || r.min_delivery_date || '', r.transit_days, transitDays, baseDate),
         mode: r.mode, // 1=Express, 2=Ground
+        dropOffOnly: isDropOffOnlyService(r.service_name),
       };
     });
 
@@ -551,10 +557,12 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
         throw requestError(400, 'Each customs product needs a description, HS code and country of origin.');
       }
     }
+    // Drop-off-only services (FedEx) are never sent to netParcel with a pickup, whatever the customer picked.
+    const bookedDropOffOnly = isDropOffOnlyService(selectedRate.carrierName, selectedRate.serviceName);
     const quoteBody: Record<string, any> = {
       packages: parcels, packagingType, specialServices,
       weightUnit: parcels[0].weightUnit, dimensionUnit: parcels[0].dimensionUnit,
-      pickupMethod: pickupDetails?.method || 'drop_off', pickupDate: pickupDetails?.pickupDate,
+      pickupMethod: bookedDropOffOnly ? 'drop_off' : (pickupDetails?.method || 'drop_off'), pickupDate: pickupDetails?.pickupDate,
       pickupLocation: pickupDetails?.location, pickupInstructions: pickupDetails?.instructions,
       readyHour: pickupDetails?.readyHour, readyMin: pickupDetails?.readyMin,
       closeHour: pickupDetails?.closeHour, closeMin: pickupDetails?.closeMin,
@@ -593,7 +601,9 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       packagingType: packagingType || 'My Packaging',
       selectedRate: authoritativeRate,
       shipmentType,
-      pickupDetails,
+      pickupDetails: pickupDetails && isDropOffOnlyService(authoritativeRate.carrierName, authoritativeRate.serviceName)
+        ? { ...pickupDetails, method: 'drop_off' }
+        : pickupDetails,
       specialServices,
       references,
       customsInvoice,
