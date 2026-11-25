@@ -99,3 +99,25 @@ test('delivery date display is identical across timezones', () => {
   assert.equal(normalizeDeliveryDate('30 September 2026'), '2026-09-30');
   assert.equal(normalizeDeliveryDate('2026-09-30T00:00:00+05:00'), '2026-09-30');
 });
+
+test('missing transit time is never invented and a same-day placeholder arrival date is not shown', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
+  service.getRates = async () => [
+    { service_code: 'none', service_name: 'UPS Worldwide Expedited', total_price: '100.00', currency: 'CAD' },
+    { service_code: 'zero', service_name: 'UPS Worldwide Saver', total_price: '110.00', currency: 'CAD', transit_days: '0', max_delivery_date: today },
+    { service_code: 'placeholder', service_name: 'Purolator Express International', total_price: '120.00', currency: 'CAD', transit_days: '7', max_delivery_date: today },
+    { service_code: 'real', service_name: 'DHL Express', total_price: '130.00', currency: 'CAD', transit_days: '3' },
+  ];
+  const result = await invoke(controller.getRates, { originPostal: 'M5V3A8', destinationPostal: '813017', destinationCountry: 'TW', originCity: 'Toronto', destinationCity: 'Kaohsiung', packages: [parcel] });
+  assert.equal(result.status, 200);
+  const by = code => result.data.rates.find(r => r.serviceCode === code);
+  assert.equal(by('none').transitDays, null);
+  assert.equal(by('none').isFastest, false);
+  assert.equal(by('none').estimatedDelivery, '');
+  assert.equal(by('zero').transitDays, null);
+  assert.equal(by('placeholder').transitDays, 7);
+  assert.ok(by('placeholder').estimatedDelivery > today, 'placeholder date must be replaced by a later arrival day');
+  assert.equal(by('real').isFastest, true);
+  assert.equal(frontend.exports.formatTransit(null), null);
+  assert.equal(frontend.exports.formatTransit(1), '1 business day');
+});

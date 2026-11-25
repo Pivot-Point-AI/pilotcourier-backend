@@ -178,7 +178,7 @@ test('contact form emails support with escaped content and reply-to, and reports
  let mail;stub(emails.transporter,'sendMail',async m=>{mail=m});
  const body={name:'Ann <b>',email:'ann@example.com',subject:'Hi\r\nBcc: x@evil.test',message:'<script>x</script>'};
  let r=await invoke(contact.submitContact,{body});assert.equal(r.status,200);
- assert.equal(mail.to,process.env.CONTACT_EMAIL||'support@pilotcourier.com');assert.deepEqual(mail.replyTo,{name:'Ann <b>',address:'ann@example.com'});
+ assert.equal(mail.to,process.env.CONTACT_EMAIL||'pilotcourier@live.com');assert.deepEqual(mail.replyTo,{name:'Ann <b>',address:'ann@example.com'});
  assert.equal(mail.subject,'Contact form: Hi Bcc: x@evil.test');assert.doesNotMatch(mail.html,/<script>|<b>/);assert.match(mail.html,/&lt;script&gt;x&lt;\/script&gt;/);
  for(const bad of [{...body,email:'nope'},{...body,message:''},{...body,name:'  '},{...body,subject:undefined}])assert.equal((await invoke(contact.submitContact,{body:bad})).status,400);
  mail=undefined;assert.equal((await invoke(contact.submitContact,{body:{...body,website:'http://spam.example'}})).status,200);assert.equal(mail,undefined);

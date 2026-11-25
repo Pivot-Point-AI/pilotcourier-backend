@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import logger from '../utils/logger';
+import { COMPANY_EMAIL } from '../utils/company';
 
 interface EmailOptions {
   to: string;
@@ -77,7 +78,7 @@ class EmailService {
         <div class="footer">
           <p>© 2024 Pilot Courier. All rights reserved.<br>
           <a href="${process.env.FRONTEND_URL}">www.pilotcourier.com</a> | 
-          <a href="mailto:support@pilotcourier.com">support@pilotcourier.com</a></p>
+          <a href="mailto:${COMPANY_EMAIL}">${COMPANY_EMAIL}</a></p>
         </div>
       </div>
     </body>
@@ -112,7 +113,7 @@ class EmailService {
         </div>
         <div class="card-row">
           <span class="card-label">Est. Delivery</span>
-          <span class="card-value">${shipment.selectedRate.estimatedDelivery || `${shipment.selectedRate.transitDays} business days`}</span>
+          <span class="card-value">${shipment.selectedRate.estimatedDelivery || (shipment.selectedRate.transitDays ? `${shipment.selectedRate.transitDays} business days` : 'Not provided by carrier')}</span>
         </div>
         <div class="card-row">
           <span class="card-label">Total Paid</span>
@@ -166,7 +167,7 @@ class EmailService {
         </div>
       </div>
 
-      <p class="text">If you have questions, please contact us at <a href="mailto:support@pilotcourier.com">support@pilotcourier.com</a>.</p>
+      <p class="text">If you have questions, please contact us at <a href="mailto:${COMPANY_EMAIL}">${COMPANY_EMAIL}</a>.</p>
     `;
 
     await this.send({
@@ -221,7 +222,7 @@ class EmailService {
       <a href="${process.env.FRONTEND_URL}/quote" class="btn">Get Your First Quote</a>
 
       <div class="divider"></div>
-      <p class="text">Need help? Our team is available at <a href="mailto:support@pilotcourier.com">support@pilotcourier.com</a>.</p>
+      <p class="text">Need help? Our team is available at <a href="mailto:${COMPANY_EMAIL}">${COMPANY_EMAIL}</a>.</p>
     `;
 
     await this.send({
@@ -262,7 +263,7 @@ class EmailService {
       <p class="text">Reply to this email to answer ${escapeHtml(msg.name)} directly.</p>
     `;
     await this.send({
-      to: process.env.CONTACT_EMAIL || 'support@pilotcourier.com',
+      to: process.env.CONTACT_EMAIL || COMPANY_EMAIL,
       replyTo: { name: msg.name, address: msg.email },
       subject: `Contact form: ${msg.subject}`,
       html: this.getBaseTemplate(content, 'New contact message'),

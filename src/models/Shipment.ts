@@ -99,7 +99,7 @@ export interface IRate {
   serviceName: string;
   totalCharge: number;
   currency: string;
-  transitDays: number;
+  transitDays: number | null;
   estimatedDelivery?: string;
   isCheapest?: boolean;
   isFastest?: boolean;

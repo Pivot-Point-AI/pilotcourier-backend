@@ -1,22 +1,27 @@
 interface DisplayRate {
   currency: string;
   totalCharge: number;
-  transitDays: number;
+  // null when the carrier gave no transit time. Such a rate is never "fastest" or "best value".
+  transitDays: number | null;
 }
 
 // Amounts can only be compared within the same currency without an FX quote.
 export function tagRates<T extends DisplayRate>(rates: T[]) {
-  const fastestDays = Math.min(...rates.map(rate => rate.transitDays));
+  const knownDays = rates.map(rate => rate.transitDays).filter((d): d is number => d !== null);
+  const fastestDays = knownDays.length ? Math.min(...knownDays) : null;
   const currencies = [...new Set(rates.map(rate => rate.currency))].sort();
   return currencies.flatMap(currency => {
     const group = rates.filter(rate => rate.currency === currency)
       .sort((a, b) => a.totalCharge - b.totalCharge);
-    const best = group.reduce((a, b) =>
-      a.totalCharge / Math.max(a.transitDays, 1) < b.totalCharge / Math.max(b.transitDays, 1) ? a : b);
+    const timed = group.filter(rate => rate.transitDays !== null);
+    const best = timed.length
+      ? timed.reduce((a, b) =>
+        a.totalCharge / Math.max(a.transitDays as number, 1) < b.totalCharge / Math.max(b.transitDays as number, 1) ? a : b)
+      : null;
     return group.map((rate, index) => ({
       ...rate,
       isCheapest: index === 0,
-      isFastest: rate.transitDays === fastestDays,
+      isFastest: rate.transitDays !== null && rate.transitDays === fastestDays,
       isBestValue: rate === best,
     }));
   });

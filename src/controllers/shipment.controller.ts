@@ -138,19 +138,37 @@ const parseNpPrice = (raw: string | number): number => {
   return Number(n.toFixed(2));
 };
 
-const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDate?: string): number => {
+// Returns null when NetParcel gives no transit time. We never invent one (no default of 5, no minimum of 1).
+const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDate?: string, baseDate: string = todayInToronto()): number | null => {
   // Prefer direct transit_days from API
   if (transitDays !== undefined && transitDays !== null) {
     const d = parseInt(String(transitDays), 10);
     if (!isNaN(d) && d > 0) return d;
   }
-  const dateStr = maxDate || minDate;
-  if (!dateStr) return 5;
-  const delivery = new Date(dateStr);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.ceil((delivery.getTime() - today.getTime()) / 86400000);
-  return Math.max(diff, 1);
+  const day = normalizeDeliveryDate(maxDate || minDate || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const diff = Math.round((Date.parse(day) - Date.parse(baseDate)) / 86400000);
+  return diff > 0 ? diff : null;
+};
+
+// NetParcel sometimes returns the ship date itself as the delivery date for services with a longer trip
+// (e.g. Purolator international "Nov 24" on Nov 24). That is a placeholder, not an arrival day. When we know the
+// real transit days we count them as business days from the ship date; otherwise we show no date.
+const addBusinessDays = (fromDay: string, days: number): string => {
+  const date = new Date(`${fromDay}T12:00:00Z`);
+  let left = days;
+  while (left > 0) {
+    date.setUTCDate(date.getUTCDate() + 1);
+    const dow = date.getUTCDay();
+    if (dow !== 0 && dow !== 6) left--;
+  }
+  return date.toISOString().slice(0, 10);
+};
+const resolveDeliveryDate = (rawDate: string, rawTransit: string | number | undefined, transitDays: number | null, baseDate: string): string => {
+  const day = normalizeDeliveryDate(rawDate);
+  const statedSameDay = rawTransit !== undefined && rawTransit !== null && parseInt(String(rawTransit), 10) === 0;
+  if (day !== baseDate || statedSameDay) return day;
+  return transitDays && transitDays > 1 ? addBusinessDays(baseDate, transitDays) : '';
 };
 
 // P.O. Box, case postale, general delivery / poste restante. "Box" alone needs a number so "Boxwood Dr" passes.
@@ -452,18 +470,22 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
         ...(err?.carrierErrors ? { carrierErrors: err.carrierErrors } : {}) });
     }
 
-    const normalized = npRates.map((r: any) => ({
-      carrierId: r.service_code,
-      carrierName: r.service_name.split(' ')[0],
-      serviceCode: r.service_code,
-      serviceName: r.service_name,
-      totalCharge: applyMarkup(parseNpPrice(r.total_price)),
-      tariffPrice: parseNpPrice(r.tarriff_price || r.tariff_price || 0),
-      currency: String(r.currency || 'CAD').trim().toUpperCase(),
-      transitDays: calcTransitDays(r.transit_days, r.min_delivery_date, r.max_delivery_date),
-      estimatedDelivery: normalizeDeliveryDate(r.max_delivery_date || r.min_delivery_date || ''),
-      mode: r.mode, // 1=Express, 2=Ground
-    }));
+    const baseDate = shipDate || todayInToronto();
+    const normalized = npRates.map((r: any) => {
+      const transitDays = calcTransitDays(r.transit_days, r.min_delivery_date, r.max_delivery_date, baseDate);
+      return {
+        carrierId: r.service_code,
+        carrierName: r.service_name.split(' ')[0],
+        serviceCode: r.service_code,
+        serviceName: r.service_name,
+        totalCharge: applyMarkup(parseNpPrice(r.total_price)),
+        tariffPrice: parseNpPrice(r.tarriff_price || r.tariff_price || 0),
+        currency: String(r.currency || 'CAD').trim().toUpperCase(),
+        transitDays,
+        estimatedDelivery: resolveDeliveryDate(r.max_delivery_date || r.min_delivery_date || '', r.transit_days, transitDays, baseDate),
+        mode: r.mode, // 1=Express, 2=Ground
+      };
+    });
 
     const rates = tagRates(normalized);
 

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import NewsletterSubscriber from '../models/NewsletterSubscriber';
 import emailService from '../services/email.service';
 import { requestError } from '../utils/shipment-access';
+import { COMPANY_EMAIL } from '../utils/company';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const text = (value: unknown, max: number): string => (typeof value === 'string' ? value.trim().slice(0, max) : '');
@@ -25,7 +26,7 @@ export const submitContact = async (req: Request, res: Response, next: NextFunct
       await emailService.sendContactMessage({ name, email, subject, message });
     } catch {
       return res.status(502).json({ success: false,
-        message: 'Your message could not be sent. Please try again later or email support@pilotcourier.com.' });
+        message: 'Your message could not be sent. Please try again later or email ' + COMPANY_EMAIL + '.' });
     }
     res.json({ success: true, message: 'Message sent.' });
   } catch (error) {

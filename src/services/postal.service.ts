@@ -1,4 +1,5 @@
 import { isPostalLookupReady } from '../utils/postal';
+import { COMPANY_EMAIL } from '../utils/company';
 export interface PostalResult {
   city: string;
   province: string;
@@ -88,7 +89,7 @@ export async function lookupPostal(country: string, postal: string): Promise<Pos
   try {
     const query = new URLSearchParams({ postalcode: postal, countrycodes: country.toLowerCase(), format: 'json', addressdetails: '1', 'accept-language': 'en', limit: '1' });
     const response = await fetch(`https://nominatim.openstreetmap.org/search?${query}`, {
-      headers: { 'User-Agent': 'PilotCourier/1.0 (support@pilotcourier.com)' }, signal: AbortSignal.timeout(4000),
+      headers: { 'User-Agent': `PilotCourier/1.0 (${COMPANY_EMAIL})` }, signal: AbortSignal.timeout(4000),
     });
     if (response.ok) {
       const results = await response.json() as any[];
