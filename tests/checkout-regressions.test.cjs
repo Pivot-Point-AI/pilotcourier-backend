@@ -301,3 +301,12 @@ test('quotes are priced for drop-off unless the customer asks for a pickup',asyn
  await invoke(controller.getRates,{body:{...quote,pickupMethod:'schedule_pickup'}});assert.equal(payload.rate.pick_up.required,true);
  const client=fs.readFileSync('../frontend/src/app/booking/BookingClient.tsx','utf8');assert.match(client,/useState<'schedule_pickup' \| 'drop_off'>\('drop_off'\)/);
 });
+
+test('FedEx is drop-off only: flagged in quotes and never booked with a pickup',async()=>{
+ assert.equal(controller.isDropOffOnlyService('FedEx'),true);assert.equal(controller.isDropOffOnlyService(undefined,'FedEx Ground'),true);assert.equal(controller.isDropOffOnlyService('UPS','UPS Standard'),false);
+ let payload;const fedex={...raw,service_name:'FedEx Ground'};stub(carrier,'getRates',async p=>{payload=p;return[fedex]});
+ const q=await invoke(controller.getRates,{body:{...quote,pickupMethod:'schedule_pickup'}});assert.equal(q.data.rates[0].dropOffOnly,true);
+ const fx={...q.data.rates[0]};stub(Shipment,'create',async d=>new Shipment(d));
+ const r=await invoke(controller.bookShipment,{body:{...booking,selectedRate:fx,pickupDetails:{method:'schedule_pickup',location:'Reception',readyHour:'10',readyMin:'00',closeHour:'14',closeMin:'00'}}});
+ assert.equal(r.status,201);assert.equal(payload.rate.pick_up.required,false);
+});
